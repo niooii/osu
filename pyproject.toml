@@ -4,4 +4,8 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "dxcam>=0.0.5",
+    "mouse>=0.7.1",
+    "numpy>=2.3.1",
+]
