@@ -6,6 +6,15 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "dxcam>=0.0.5",
+    "jupyter>=1.1.1",
+    "matplotlib>=3.10.3",
     "mouse>=0.7.1",
+    "mutagen>=1.47.0",
     "numpy>=2.3.1",
+    "pandas>=2.3.0",
+    "polars>=1.31.0",
+    "pyautogui>=0.9.54",
+    "pygame>=2.6.1",
+    "scikit-learn>=1.7.0",
+    "tqdm>=4.67.1",
 ]

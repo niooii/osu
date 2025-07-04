@@ -1,0 +1,405 @@
+import math
+
+from abc import ABC, abstractmethod
+from enum import Enum, IntEnum, IntFlag
+
+from . import core
+from ._util import bezier
+
+class HitObjectType(IntFlag):
+	CIRCLE          = 0b00000001
+	SLIDER          = 0b00000010
+	NEW_COMBO       = 0b00000100
+	SPINNER         = 0b00001000
+	COMBO_SKIP      = 0b01110000
+	MANIA_HOLD      = 0b10000000
+
+class HitSounds(IntFlag):
+	NORMAL  = 0b0001
+	WHISTLE = 0b0010
+	FINISH  = 0b0100
+	CLAP    = 0b1000
+
+class SampleSet(IntEnum):
+	AUTO    = 0
+	NORMAL  = 1
+	SOFT    = 2
+	DRUM    = 3
+
+class HitSoundExtras:
+	def __init__(self, *args):
+		self.sample_set = SampleSet(int(args[0]))
+		self.addition_set = SampleSet(int(args[1]))
+		self.customIndex = int(args[2])
+		self.sampleVolume = int(args[3])
+		self.filename = args[4]
+
+class HitObject(ABC):
+	def __init__(self, *args):
+		self.x = int(args[0])
+		self.y = int(args[1])
+		self.time = int(args[2])
+		self.new_combo = bool(int(args[3]) & HitObjectType.NEW_COMBO)
+		self.combo_skip = int(args[3] & HitObjectType.COMBO_SKIP) >> 4
+		self.hitsounds = HitSounds(int(args[4]))
+		#self.extras = HitSoundExtras(*args[-1].split(":"))
+
+	@abstractmethod
+	def duration(self, beat_duration:float, multiplier:float=1.0):
+		pass
+
+	def target_position(self, time:int, beat_duration:float, multiplier:float=1.0):
+		return (self.x, self.y)
+
+class HitCircle(HitObject):
+	def __init__(self, *args):
+		super().__init__(*args)
+
+	def duration(self, *args):
+		return 0
+
+class SliderType(Enum):
+	LINEAR  = "L"
+	BEZIER  = "B"
+	PERFECT = "P"
+	CATMUL  = "C"
+
+def _compute_linear_curve(points, num_points=50):
+	"""Compute linear curve points (straight lines between points)"""
+	if len(points) < 2:
+		return points
+	
+	curve_points = []
+	for i in range(len(points) - 1):
+		start = points[i]
+		end = points[i + 1]
+		
+		for t in range(num_points):
+			t_val = t / (num_points - 1)
+			x = start[0] + t_val * (end[0] - start[0])
+			y = start[1] + t_val * (end[1] - start[1])
+			curve_points.append((int(x), int(y)))
+	
+	return curve_points
+
+
+def _compute_perfect_circle_curve(points, num_points=50):
+	"""Compute perfect circle curve from 3 points"""
+	if len(points) < 3:
+		return _compute_linear_curve(points, num_points)
+	
+	# For perfect circle, we need exactly 3 points
+	p1, p2, p3 = points[:3]
+	
+	# Calculate center and radius of the circle
+	# Using the perpendicular bisector method
+	mid1 = ((p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2)
+	mid2 = ((p2[0] + p3[0]) / 2, (p2[1] + p3[1]) / 2)
+	
+	# Direction vectors
+	dir1 = (p2[0] - p1[0], p2[1] - p1[1])
+	dir2 = (p3[0] - p2[0], p3[1] - p2[1])
+	
+	# Perpendicular vectors
+	perp1 = (-dir1[1], dir1[0])
+	perp2 = (-dir2[1], dir2[0])
+	
+	# Normalize
+	len1 = math.sqrt(perp1[0]**2 + perp1[1]**2)
+	len2 = math.sqrt(perp2[0]**2 + perp2[1]**2)
+	
+	if len1 == 0 or len2 == 0:
+		return _compute_linear_curve(points, num_points)
+	
+	perp1 = (perp1[0] / len1, perp1[1] / len1)
+	perp2 = (perp2[0] / len2, perp2[1] / len2)
+	
+	# Find intersection of perpendicular bisectors
+	# This is the center of the circle
+	try:
+		# Solve for intersection point
+		# mid1 + t1 * perp1 = mid2 + t2 * perp2
+		det = perp1[0] * perp2[1] - perp1[1] * perp2[0]
+		if abs(det) < 1e-10:
+			return _compute_linear_curve(points, num_points)
+		
+		t1 = ((mid2[0] - mid1[0]) * perp2[1] - (mid2[1] - mid1[1]) * perp2[0]) / det
+		center = (mid1[0] + t1 * perp1[0], mid1[1] + t1 * perp1[1])
+		
+		# Calculate radius
+		radius = math.sqrt((p1[0] - center[0])**2 + (p1[1] - center[1])**2)
+		
+		# Calculate angles for all three points
+		angle1 = math.atan2(p1[1] - center[1], p1[0] - center[0])
+		angle2 = math.atan2(p2[1] - center[1], p2[0] - center[0])
+		angle3 = math.atan2(p3[1] - center[1], p3[0] - center[0])
+		
+		# from angle1 to angle2 to angle3
+		curve_points = []
+		segments = [(angle1, angle2), (angle2, angle3)]
+		
+		# Calculate arc lengths for proportional point distribution
+		arc_lengths = []
+		total_arc_length = 0
+		
+		for start_angle, end_angle in segments:
+			# Calculate the shorter arc between these two angles
+			angle_diff = end_angle - start_angle
+			if angle_diff > math.pi:
+				angle_diff -= 2 * math.pi
+			elif angle_diff < -math.pi:
+				angle_diff += 2 * math.pi
+			
+			arc_length = abs(angle_diff) * radius
+			arc_lengths.append(arc_length)
+			total_arc_length += arc_length
+		
+		# Generate points proportionally to arc lengths
+		for i, (start_angle, end_angle) in enumerate(segments):
+			# Calculate the shorter arc between these two angles
+			angle_diff = end_angle - start_angle
+			if angle_diff > math.pi:
+				angle_diff -= 2 * math.pi
+			elif angle_diff < -math.pi:
+				angle_diff += 2 * math.pi
+			
+			# Calculate proportional number of points for this segment
+			if total_arc_length > 0:
+				segment_points = max(1, int((arc_lengths[i] / total_arc_length) * num_points))
+			else:
+				segment_points = num_points // 2
+			
+			for j in range(segment_points):
+				t_val = j / (segment_points - 1) if segment_points > 1 else 0
+				angle = start_angle + t_val * angle_diff
+				x = center[0] + radius * math.cos(angle)
+				y = center[1] + radius * math.sin(angle)
+				curve_points.append((int(x), int(y)))
+		
+		return curve_points
+	except:
+		return _compute_linear_curve(points, num_points)
+
+
+def _compute_catmull_rom_curve(points, num_points=50):
+	"""Compute Catmull-Rom curve points"""
+	if len(points) < 3:
+		return _compute_linear_curve(points, num_points)
+	
+	curve_points = []
+	
+	# Add virtual start and end points for Catmull-Rom
+	extended_points = [points[0]] + list(points) + [points[-1]]
+	
+	for i in range(1, len(extended_points) - 2):
+		p0 = extended_points[i - 1]
+		p1 = extended_points[i]
+		p2 = extended_points[i + 1]
+		p3 = extended_points[i + 2]
+		
+		for t in range(num_points):
+			t_val = t / (num_points - 1)
+			
+			# Catmull-Rom matrix coefficients
+			t2 = t_val * t_val
+			t3 = t2 * t_val
+			
+			# Catmull-Rom blending functions
+			b0 = -0.5 * t3 + t2 - 0.5 * t_val
+			b1 = 1.5 * t3 - 2.5 * t2 + 1
+			b2 = -1.5 * t3 + 2 * t2 + 0.5 * t_val
+			b3 = 0.5 * t3 - 0.5 * t2
+			
+			x = b0 * p0[0] + b1 * p1[0] + b2 * p2[0] + b3 * p3[0]
+			y = b0 * p0[1] + b1 * p1[1] + b2 * p2[1] + b3 * p3[1]
+			
+			curve_points.append((int(x), int(y)))
+	
+	return curve_points
+
+
+class Slider(HitCircle):
+	def __init__(self, *args):
+		super().__init__(*args)
+
+		slider_info = args[5].split("|")
+		self.slider_type = SliderType(slider_info[0])
+		self.curve_points = list(map(lambda p: tuple(map(int, p)), [p.split(':') for p in slider_info[1:]]))
+
+		self.repeat = int(args[6])
+		self.pixel_length = int(args[7])
+		#self.edge_hitsounds = [HitSounds(int(h)) for h in args[8].split('|')]
+
+		#additions = [e.split(":") for e in args[9].split('|')]
+		#self.edge_additions = [(SampleSet(int(s)), SampleSet(int(a))) for s, a in additions]
+
+	def duration(self, beat_duration:float, multiplier:float=1.0):
+		return beat_duration * self.pixel_length / (100 * multiplier) * self.repeat
+
+	def real_curve_points(self):
+		points = []
+		for i in range(1, self.repeat + 1):
+			l = ([(self.x, self.y)] + self.curve_points)
+			if i % 2 == 0:
+				l = list(reversed(l))
+			points += l
+		return points
+
+	def _get_base_curve_points(self):
+		"""Get the base curve points for the slider (without repeats)"""
+		all_points = [(self.x, self.y)] + self.curve_points
+		
+		# Compute base curve based on slider type
+		if self.slider_type == SliderType.BEZIER:
+			base_curve = bezier.compute(all_points)
+		elif self.slider_type == SliderType.LINEAR:
+			base_curve = _compute_linear_curve(all_points)
+		elif self.slider_type == SliderType.PERFECT:
+			base_curve = _compute_perfect_circle_curve(all_points)
+		elif self.slider_type == SliderType.CATMUL:
+			base_curve = _compute_catmull_rom_curve(all_points)
+		else:
+			# Fallback to linear
+			base_curve = _compute_linear_curve(all_points)
+		
+		# Calculate the actual length of the curve
+		curve_length = 0
+		segment_lengths = []
+		for i in range(1, len(base_curve)):
+			dx = base_curve[i][0] - base_curve[i-1][0]
+			dy = base_curve[i][1] - base_curve[i-1][1]
+			segment_length = math.sqrt(dx*dx + dy*dy)
+			curve_length += segment_length
+			segment_lengths.append(segment_length)
+		
+		# Handle length adjustment
+		if len(base_curve) > 1:
+			if curve_length < self.pixel_length:
+				# Extend the curve with a straight line
+				remaining_length = self.pixel_length - curve_length
+				
+				# Get the direction of the last segment
+				last_point = base_curve[-1]
+				second_last_point = base_curve[-2]
+				
+				dx = last_point[0] - second_last_point[0]
+				dy = last_point[1] - second_last_point[1]
+				last_segment_length = math.sqrt(dx*dx + dy*dy)
+				
+				if last_segment_length > 0:
+					# Normalize the direction vector
+					dx = dx / last_segment_length
+					dy = dy / last_segment_length
+					
+					# Calculate the end point of the extension
+					extension_x = int(last_point[0] + dx * remaining_length)
+					extension_y = int(last_point[1] + dy * remaining_length)
+					
+					# Add the extension point
+					base_curve.append((extension_x, extension_y))
+			
+			elif curve_length > self.pixel_length:
+				# Shorten the curve to match the target length
+				target_length = self.pixel_length
+				current_length = 0
+				shortened_curve = [base_curve[0]]  # Always include the start point
+				
+				for i in range(1, len(base_curve)):
+					dx = base_curve[i][0] - base_curve[i-1][0]
+					dy = base_curve[i][1] - base_curve[i-1][1]
+					segment_length = math.sqrt(dx*dx + dy*dy)
+					
+					if current_length + segment_length <= target_length:
+						# Include the full segment
+						shortened_curve.append(base_curve[i])
+						current_length += segment_length
+					else:
+						# Partial segment - interpolate to the target length
+						remaining_length = target_length - current_length
+						if segment_length > 0:
+							ratio = remaining_length / segment_length
+							interpolated_x = int(base_curve[i-1][0] + dx * ratio)
+							interpolated_y = int(base_curve[i-1][1] + dy * ratio)
+							shortened_curve.append((interpolated_x, interpolated_y))
+						break
+				
+				base_curve = shortened_curve
+		
+		return base_curve
+
+	def _get_curve_points(self):
+		"""Get the complete curve points for the slider including repeats"""
+		base_curve = self._get_base_curve_points()
+		
+		# Handle repeats and reversals
+		complete_curve = []
+		for i in range(1, self.repeat + 1):
+			if i % 2 == 1:
+				# Forward direction
+				complete_curve.extend(base_curve)
+			else:
+				# Reverse direction
+				complete_curve.extend(list(reversed(base_curve)))
+		
+		return complete_curve
+
+	def current_curve_point(self, time:int, beat_duration:float, multiplier:float=1.0):
+		elapsed = time - self.time
+		if elapsed <= 0:
+			return (self.x, self.y)
+
+		duration = self.duration(beat_duration, multiplier)
+		if elapsed >= duration:
+			# Return the end position
+			curve_points = self._get_curve_points()
+			return curve_points[-1] if curve_points else (self.x, self.y)
+
+		# Calculate progress along the slider (0.0 to 1.0)
+		progress = elapsed / duration
+		
+		# Get the complete curve points including repeats
+		curve_points = self._get_curve_points()
+		
+		if not curve_points:
+			return (self.x, self.y)
+		
+		# Calculate the position along the curve
+		total_points = len(curve_points)
+		if total_points <= 1:
+			return curve_points[0]
+		
+		# Interpolate between curve points
+		exact_index = progress * (total_points - 1)
+		index = int(exact_index)
+		fraction = exact_index - index
+		
+		if index >= total_points - 1:
+			return curve_points[-1]
+		
+		# Linear interpolation between the two nearest points
+		start_point = curve_points[index]
+		end_point = curve_points[index + 1]
+		
+		x = start_point[0] + fraction * (end_point[0] - start_point[0])
+		y = start_point[1] + fraction * (end_point[1] - start_point[1])
+		
+		return (int(x), int(y))
+
+	def target_position(self, time:int, beat_duration:float, multiplier:float=1.0):
+		return self.current_curve_point(time, beat_duration, multiplier)
+
+class Spinner(HitObject):
+	def __init__(self, *args):
+		super().__init__(*args)
+		self.end_time = int(args[5])
+		
+	def duration(self, *args):
+		return self.end_time - self.time
+
+def create(obj):
+	if obj[3] & HitObjectType.CIRCLE:
+		return HitCircle(*obj)
+	elif obj[3] & HitObjectType.SLIDER:
+		return Slider(*obj)
+	elif obj[3] & HitObjectType.SPINNER:
+		return Spinner(*obj)
