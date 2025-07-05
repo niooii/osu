@@ -363,27 +363,51 @@ class Slider(HitCircle):
 		if not curve_points:
 			return (self.x, self.y)
 		
-		# Calculate the position along the curve
+		# Calculate the position along the curve using arc-length parameterization
 		total_points = len(curve_points)
 		if total_points <= 1:
 			return curve_points[0]
 		
-		# Interpolate between curve points
-		exact_index = progress * (total_points - 1)
-		index = int(exact_index)
-		fraction = exact_index - index
+		# Calculate cumulative arc lengths for each point
+		cumulative_lengths = [0.0]
+		total_length = 0.0
 		
-		if index >= total_points - 1:
-			return curve_points[-1]
+		for i in range(1, len(curve_points)):
+			dx = curve_points[i][0] - curve_points[i-1][0]
+			dy = curve_points[i][1] - curve_points[i-1][1]
+			segment_length = math.sqrt(dx*dx + dy*dy)
+			total_length += segment_length
+			cumulative_lengths.append(total_length)
 		
-		# Linear interpolation between the two nearest points
-		start_point = curve_points[index]
-		end_point = curve_points[index + 1]
+		# Find the target arc length based on progress
+		target_length = progress * total_length
 		
-		x = start_point[0] + fraction * (end_point[0] - start_point[0])
-		y = start_point[1] + fraction * (end_point[1] - start_point[1])
+		# Find the segment containing the target length
+		for i in range(len(cumulative_lengths) - 1):
+			if cumulative_lengths[i] <= target_length <= cumulative_lengths[i + 1]:
+				# Interpolate within this segment
+				segment_start_length = cumulative_lengths[i]
+				segment_end_length = cumulative_lengths[i + 1]
+				segment_length = segment_end_length - segment_start_length
+				
+				if segment_length > 0:
+					# Calculate interpolation ratio within the segment
+					segment_progress = (target_length - segment_start_length) / segment_length
+					
+					# Linear interpolation between the two points
+					start_point = curve_points[i]
+					end_point = curve_points[i + 1]
+					
+					x = start_point[0] + segment_progress * (end_point[0] - start_point[0])
+					y = start_point[1] + segment_progress * (end_point[1] - start_point[1])
+					
+					return (int(x), int(y))
+				else:
+					# Zero-length segment, return the point
+					return curve_points[i]
 		
-		return (int(x), int(y))
+		# Fallback: return the last point
+		return curve_points[-1]
 
 	def target_position(self, time:int, beat_duration:float, multiplier:float=1.0):
 		return self.current_curve_point(time, beat_duration, multiplier)

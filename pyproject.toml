@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "beautifulsoup4>=4.13.4",
     "dxcam>=0.0.5",
     "jupyter>=1.1.1",
     "matplotlib>=3.10.3",
@@ -15,6 +16,7 @@ dependencies = [
     "polars>=1.31.0",
     "pyautogui>=0.9.54",
     "pygame>=2.6.1",
+    "python-dotenv>=1.1.1",
     "scikit-learn>=1.7.0",
     "tqdm>=4.67.1",
 ]

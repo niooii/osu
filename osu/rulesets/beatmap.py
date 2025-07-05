@@ -124,6 +124,51 @@ class Beatmap:
 	def circle_radius(self):
 		return 27.2 - 2.24 * self['CircleSize']
 
+	def title(self):
+		return self['Title']
+
+	def title_unicode(self):
+		return self['TitleUnicode']
+
+	def artist(self):
+		return self['Artist']
+
+	def artist_unicode(self):
+		return self['ArtistUnicode']
+
+	def creator(self):
+		return self['Creator']
+
+	def version(self):
+		return self['Version']
+
+	def source(self):
+		return self['Source']
+
+	def tags(self):
+		return self['Tags']
+
+	def beatmap_id(self):
+		return self['BeatmapID']
+
+	def beatmap_set_id(self):
+		return self['BeatmapSetID']
+
+	def hp_drain_rate(self):
+		return self['HPDrainRate']
+
+	def overall_difficulty(self):
+		return self['OverallDifficulty']
+
+	def ar_raw(self):
+		return self['ApproachRate']
+
+	def slider_multiplier(self):
+		return self['SliderMultiplier']
+
+	def slider_tick_rate(self):
+		return self['SliderTickRate']
+
 	def start_offset(self):
 		preempt, _ = self.approach_rate()
 		return int(self.hit_objects[0].time - preempt)

@@ -2,7 +2,7 @@ from . import hitobjects
 
 class TimingPoint:
     def __init__(self, *args):
-        self.offset = int(args[0])
+        self.offset = float(args[0])
         self.bpm = float(args[1])
         self.meter = int(args[2])
         self.sample_set = hitobjects.SampleSet(int(args[3]))

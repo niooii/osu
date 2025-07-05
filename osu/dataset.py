@@ -29,7 +29,6 @@ _DEFAULT_BEATMAP_FRAME = (
     float("inf"), False, False # time_left, is_slider, is_spinner
 )
 
-
 def pt_pad_sequences(data, maxlen, value=0):
     if not data:
         return np.array([])
@@ -67,7 +66,7 @@ def all_files(osu_path, limit=0, verbose=False):
             beatmaps.insert(0, beatmap)
 
     global _beatmap_cache
-    with open('.data/beatmap_cache.dat', 'wb') as f:
+    with open('../.data/beatmap_cache.dat', 'wb') as f:
         pickle.dump(_beatmap_cache, f)
 
     if verbose:
@@ -240,7 +239,7 @@ def _list_all_replays(osu_path):
 # Maybe in the future I'll look into using osu! database file for that,
 # but this will do just fine for now.
 try:
-    with open('.data/beatmap_cache.dat', 'rb') as f:
+    with open('../.data/beatmap_cache.dat', 'rb') as f:
         _beatmap_cache = pickle.load(f)
 except:
     _beatmap_cache = {}
