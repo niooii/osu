@@ -2,7 +2,7 @@ import numpy as np
 import cv2
 import mouse
 from video import GameCapture
-from osu import on_frame
+from osu_rl import on_frame
 
 mouse.move(-800, 100)
 mouse.click()

@@ -15,6 +15,8 @@ from functools import reduce
 class Mod(IntFlag):
     DT = 0x40
     HR = 0x10
+    HT = 0x100
+    EZ = 0x1
 
 class Replay:
     def __init__(self, file):

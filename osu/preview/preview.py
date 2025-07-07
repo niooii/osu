@@ -29,6 +29,8 @@ def preview_replay(ia_replay, beatmap: bm.Beatmap, audio_file=None):
 
     pygame.init()
 
+    pygame.display.set_caption(f'{beatmap.title()} [{beatmap.version()}]')
+
     time = 0
     clock = pygame.time.Clock()
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))

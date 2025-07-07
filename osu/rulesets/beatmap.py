@@ -7,233 +7,256 @@ from ._util.bsearch import bsearch
 import re
 
 _SECTION_TYPES = {
-	'General':      'a',
-	'Editor':       'a',
-	'Metadata':     'a',
-	'Difficulty':   'a',
-	'Events':       'b',
-	'TimingPoints': 'b',
-	'Colours':      'a',
-	'HitObjects':   'b'
+    'General': 'a',
+    'Editor': 'a',
+    'Metadata': 'a',
+    'Difficulty': 'a',
+    'Events': 'b',
+    'TimingPoints': 'b',
+    'Colours': 'a',
+    'HitObjects': 'b'
 }
 
+
 class _BeatmapFile:
-	def __init__(self, file):
-		self.file = file
-		self.format_version = self.file.readline()
+    def __init__(self, file):
+        self.file = file
+        self.format_version = self.file.readline()
 
-	def read_all_sections(self):
-		sections = {}
-		section = self._read_section_header()
-		while section != None:
-			func = "_read_type_%s_section" % _SECTION_TYPES[section]
-			section_name = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', section).lower()
+    def read_all_sections(self):
+        sections = {}
+        section = self._read_section_header()
+        while section != None:
+            func = "_read_type_%s_section" % _SECTION_TYPES[section]
+            section_name = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', section).lower()
 
-			sections[section_name] = getattr(self, func)()
-			section = self._read_section_header()
+            sections[section_name] = getattr(self, func)()
+            section = self._read_section_header()
 
-		return sections
+        return sections
 
-	def _read_section_header(self):
-		header = self.file.readline()
-		while header != '' and re.match(r"[^\n\r\s]", header) == None:
-			header = self.file.readline()
-			
-		m = re.match(r"^\s*\[(\S+)\]\s*$", header)
+    def _read_section_header(self):
+        header = self.file.readline()
+        while header != '' and re.match(r"[^\n\r\s]", header) == None:
+            header = self.file.readline()
 
-		if m is None:
-			return None
-		
-		return m[1]
+        m = re.match(r"^\s*\[(\S+)\]\s*$", header)
 
-	def _parse_value(self, v):
-		if v.isdigit():
-			return int(v)
-		elif v.replace('.', '', 1).isdigit():
-			return float(v)
-		else:
-			return v
-		
-	# Seção do tipo Chave: Valor
-	def _read_type_a_section(self):
-		d = dict()
+        if m is None:
+            return None
 
-		line = self.file.readline()
-		while line != '' and re.match(r"[^\n\r\s]", line) != None:
-			m = re.match(r"^\s*(\S+)\s*:\s*(.*)\s*\r?\n$", line)
-			if m is None:
-				raise RuntimeError("Invalid file")
-			else:
-				d[m[1]] = self._parse_value(m[2])
+        return m[1]
 
-			line = self.file.readline()
+    def _parse_value(self, v):
+        if v.isdigit():
+            return int(v)
+        elif v.replace('.', '', 1).isdigit():
+            return float(v)
+        else:
+            return v
 
-		return d
+    # Seção do tipo Chave: Valor
+    def _read_type_a_section(self):
+        d = dict()
 
-	# Seção do tipo a,b,c,...,d
-	def _read_type_b_section(self):
-		l = list()
+        line = self.file.readline()
+        while line != '' and re.match(r"[^\n\r\s]", line) != None:
+            m = re.match(r"^\s*(\S+)\s*:\s*(.*)\s*\r?\n$", line)
+            if m is None:
+                raise RuntimeError("Invalid file")
+            else:
+                d[m[1]] = self._parse_value(m[2])
 
-		line = self.file.readline()
-		while line != '' and re.match(r"[^\n\r\s]", line) != None:
-			l.append(list(map(self._parse_value, line.rstrip("\r\n").split(','))))
-			line = self.file.readline()
+            line = self.file.readline()
 
-		return l
+        return d
+
+    # Seção do tipo a,b,c,...,d
+    def _read_type_b_section(self):
+        l = list()
+
+        line = self.file.readline()
+        while line != '' and re.match(r"[^\n\r\s]", line) != None:
+            l.append(list(map(self._parse_value, line.rstrip("\r\n").split(','))))
+            line = self.file.readline()
+
+        return l
+
 
 class Beatmap:
-	def __init__(self, file):
-		file = _BeatmapFile(file)
+    def __init__(self, file):
+        file = _BeatmapFile(file)
 
-		self.format_version = file.format_version
-		self.sections = file.read_all_sections()
+        self.format_version = file.format_version
+        self.sections = file.read_all_sections()
+        self.dt = False
+        self.hr = False
+        self.ez = False
+        self.ht = False
 
-		if 'timing_points' in self.sections:
-			self.timing_points = list(map(timing_points.create, self.sections['timing_points']))
-			del self.sections['timing_points']
+        if 'timing_points' in self.sections:
+            self.timing_points = list(map(timing_points.create, self.sections['timing_points']))
+            del self.sections['timing_points']
 
-		if 'hit_objects' in self.sections:
-			self.hit_objects = list(map(hitobjects.create, self.sections['hit_objects']))
-			del self.sections['hit_objects']
+        if 'hit_objects' in self.sections:
+            self.hit_objects = list(map(hitobjects.create, self.sections['hit_objects']))
+            del self.sections['hit_objects']
 
-	def combo_color(self, new_combo, combo_skip):
-		return (255, 0, 0)
+    def combo_color(self, new_combo, combo_skip):
+        return (255, 0, 0)
 
-	def __getattr__(self, key):
-		if key in self.sections:
-			return self.sections[key]
-		else:
-			return []
-		
-	def __getitem__(self, key):
-		for section in self.sections.values():
-			if key in section:
-				return section[key]
-		return None
-	
-	def approach_rate(self):
-		ar = self["ApproachRate"]
-		if ar <= 5:
-			preempt = 1200 + 600 * (5 - ar) / 5
-			fade_in = 800 + 400 * (5 - ar) / 5
-		else:
-			preempt = 1200 - 750 * (ar - 5) / 5
-			fade_in = 800 - 500 * (ar - 5) / 5
-		return preempt, fade_in
+    def __getattr__(self, key):
+        if key in self.sections:
+            return self.sections[key]
+        else:
+            return []
 
-	def circle_radius(self):
-		return 27.2 - 2.24 * self['CircleSize']
+    def __getitem__(self, key):
+        for section in self.sections.values():
+            if key in section:
+                return section[key]
+        return None
 
-	def title(self):
-		return self['Title']
+    def apply_mods(self, mods: list[str]):
+        for mod in mods:
+            mod = mod.lower()
+            if mod != 'dt' and mod != 'hr' and mod != 'ez' and mod != 'ht':
+                raise ValueError(f"Invalid mod: {mod}. Only 'dt', 'hr', 'ez', and 'ht' are accepted/used.")
 
-	def title_unicode(self):
-		return self['TitleUnicode']
+            if mod == 'dt':
+                self.dt = True
+            elif mod == 'hr':
+                self.hr = True
+            elif mod == 'ez':
+                self.ez = True
+            elif mod == 'ht':
+                self.ht = True
 
-	def artist(self):
-		return self['Artist']
+    def approach_rate(self):
+        ar = self["ApproachRate"]
+        if ar <= 5:
+            preempt = 1200 + 600 * (5 - ar) / 5
+            fade_in = 800 + 400 * (5 - ar) / 5
+        else:
+            preempt = 1200 - 750 * (ar - 5) / 5
+            fade_in = 800 - 500 * (ar - 5) / 5
+        return preempt, fade_in
 
-	def artist_unicode(self):
-		return self['ArtistUnicode']
+    def circle_radius(self):
+        return 27.2 - 2.24 * self['CircleSize']
 
-	def creator(self):
-		return self['Creator']
+    def title(self):
+        return self['Title']
 
-	def version(self):
-		return self['Version']
+    def title_unicode(self):
+        return self['TitleUnicode']
 
-	def source(self):
-		return self['Source']
+    def artist(self):
+        return self['Artist']
 
-	def tags(self):
-		return self['Tags']
+    def artist_unicode(self):
+        return self['ArtistUnicode']
 
-	def beatmap_id(self):
-		return self['BeatmapID']
+    def creator(self):
+        return self['Creator']
 
-	def beatmap_set_id(self):
-		return self['BeatmapSetID']
+    def version(self):
+        return self['Version']
 
-	def hp_drain_rate(self):
-		return self['HPDrainRate']
+    def source(self):
+        return self['Source']
 
-	def overall_difficulty(self):
-		return self['OverallDifficulty']
+    def tags(self):
+        return self['Tags']
 
-	def ar_raw(self):
-		return self['ApproachRate']
+    def beatmap_id(self):
+        return self['BeatmapID']
 
-	def slider_multiplier(self):
-		return self['SliderMultiplier']
+    def beatmap_set_id(self):
+        return self['BeatmapSetID']
 
-	def slider_tick_rate(self):
-		return self['SliderTickRate']
+    def hp_drain_rate(self):
+        return self['HPDrainRate']
 
-	def start_offset(self):
-		preempt, _ = self.approach_rate()
-		return int(self.hit_objects[0].time - preempt)
+    def overall_difficulty(self):
+        return self['OverallDifficulty']
 
-	def length(self):
-		if len(self.hit_objects) == 0:
-			return 0
-		last_obj = self.hit_objects[-1]
-		beat_duration = self.beat_duration(last_obj.time)
-		return int(last_obj.time + last_obj.duration(beat_duration, self['SliderMultiplier']))
+    def ar_raw(self):
+        return self['ApproachRate']
 
-	def _timing(self, time):
-		bpm = None
-		i = bsearch(self.timing_point, time, lambda tp: tp.time)
-		timing_point = self.timing_points[i - 1]
+    def slider_multiplier(self):
+        return self['SliderMultiplier']
 
-		for tp in self.timing_points[i:]:
-			if tp.offset > time:
-				break
-			if tp.bpm > 0:
-				bpm = tp.bpm
-			timing_point = tp
+    def slider_tick_rate(self):
+        return self['SliderTickRate']
 
-		while i >= 0 and bpm is None:
-			i -= 1
-			if self.timing_points[i].bpm > 0:
-				bpm = self.timing_points[i].bpm
+    def start_offset(self):
+        preempt, _ = self.approach_rate()
+        return int(self.hit_objects[0].time - preempt)
 
-		return bpm or 120, timing_point
+    def length(self):
+        if len(self.hit_objects) == 0:
+            return 0
+        last_obj = self.hit_objects[-1]
+        beat_duration = self.beat_duration(last_obj.time)
+        return int(last_obj.time + last_obj.duration(beat_duration, self['SliderMultiplier']))
 
-	def beat_duration(self, time):
-		bpm, timing_point = self._timing(time)
-		beat_duration = timing_point.bpm
-		if beat_duration < 0:
-			return bpm * -beat_duration / 100
-		return beat_duration
+    def _timing(self, time):
+        bpm = None
+        i = bsearch(self.timing_point, time, lambda tp: tp.time)
+        timing_point = self.timing_points[i - 1]
 
-	# Pega os objetos visíveis na tela em dado momento
-	def visible_objects(self, time, count=None):
-		objects = []
-		preempt, _ = self.approach_rate()
+        for tp in self.timing_points[i:]:
+            if tp.offset > time:
+                break
+            if tp.bpm > 0:
+                bpm = tp.bpm
+            timing_point = tp
 
-		i = bsearch(self.hit_objects, time, lambda obj: obj.time + preempt - obj.duration(self.beat_duration(obj.time), self['SliderMultiplier']))
-		i -= 5
-		if i < 0:
-			i = 0
-		
-		n = 0
+        while i >= 0 and bpm is None:
+            i -= 1
+            if self.timing_points[i].bpm > 0:
+                bpm = self.timing_points[i].bpm
 
-		for obj in self.hit_objects[i:]:
-			obj_duration = obj.duration(self.beat_duration(obj.time), self['SliderMultiplier'])
+        return bpm or 120, timing_point
 
-			if time > obj.time + obj_duration:
-				continue
-			elif time < obj.time - preempt:
-				break
-			elif time < obj.time + obj_duration:
-				objects.append(obj)
+    def beat_duration(self, time):
+        bpm, timing_point = self._timing(time)
+        beat_duration = timing_point.bpm
+        if beat_duration < 0:
+            return bpm * -beat_duration / 100
+        return beat_duration
 
-			n += 1
-			if not count is None and n >= count:
-				return objects
-			
-		return objects
+    # Pega os objetos visíveis na tela em dado momento
+    def visible_objects(self, time, count=None):
+        objects = []
+        preempt, _ = self.approach_rate()
+
+        i = bsearch(self.hit_objects, time, lambda obj: obj.time + preempt - obj.duration(self.beat_duration(obj.time),
+                                                                                          self['SliderMultiplier']))
+        i -= 5
+        if i < 0:
+            i = 0
+
+        n = 0
+
+        for obj in self.hit_objects[i:]:
+            obj_duration = obj.duration(self.beat_duration(obj.time), self['SliderMultiplier'])
+
+            if time > obj.time + obj_duration:
+                continue
+            elif time < obj.time - preempt:
+                break
+            elif time < obj.time + obj_duration:
+                objects.append(obj)
+
+            n += 1
+            if not count is None and n >= count:
+                return objects
+
+        return objects
+
 
 def load(filename):
-	with open(filename, 'r', encoding='utf8') as file:
-		return Beatmap(file)
+    with open(filename, 'r', encoding='utf8') as file:
+        return Beatmap(file)

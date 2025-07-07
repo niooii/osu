@@ -3,9 +3,5 @@
   <component name="Black">
     <option name="sdkName" value="Python 3.13 (osu)" />
   </component>
-  <component name="DiscordProjectSettings">
-    <option name="show" value="ASK" />
-    <option name="description" value="" />
-  </component>
   <component name="ProjectRootManager" version="2" project-jdk-name="Python 3.13 (osu)" project-jdk-type="Python SDK" />
 </project>

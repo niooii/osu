@@ -1,0 +1,67 @@
+Overall difficulty (OD) defines how difficult it is to achieve high accuracy on a beatmap. The value ranges from 0 to 10, where higher OD will require more accuracy and precision.
+Score 	Hit window (ms)
+300 	80 - 6 × OD
+100 	140 - 8 × OD
+50 	200 - 10 × OD
+Sliders and spinners
+
+In osu!, sliders will reward a 300 as long as they are hit within the 50's hit window.
+
+Overall difficulty also affects spinners. The spins per second required to clear a spinner is defined by the following formula:
+
+    OD < 5: 5 - 2 × (5 - OD) / 5
+    OD = 5: 5
+    OD > 5: 5 + 2.5 × (OD - 5) / 5
+There are four mods that alter the overall difficulty when activated:
+
+    Easy: Halves the OD value.
+    Hard Rock: Multiplies the OD value by 1.4, up to a maximum of 10.
+    Double Time: The OD value is not affected, but due to the 50% play speed increase, hit windows are 33% shorter.
+    Half Time: The OD value is not affected, but due to the 25% play speed decrease, hit windows are 33% larger.
+
+While Half Time and Double Time do not change the OD value, the speed difference leads to a change in the hit windows. Because the scaling is different for each score value, DT causes the windows for 100 and 50 to become tighter than usual compared to 300, and HT causes them to become more lenient.
+
+aproach rate:
+
+There are four mods that alter the HP drain rate when activated:
+
+    Easy: Halves the HP value.
+    Hard Rock: Multiplies the HP value by 1.4, up to a maximum of 10.
+    Double Time: The HP value is not affected, but due to the 50% play speed increase, health drain occurs 50% faster.
+    Half Time: The HP value is not affected, but due to the 25% play speed decrease, health drain occurs 25% slower.
+
+The hit object starts fading in at X - preempt with:
+
+    AR < 5: preempt = 1200ms + 600ms * (5 - AR) / 5
+    AR = 5: preempt = 1200ms
+    AR > 5: preempt = 1200ms - 750ms * (AR - 5) / 5
+
+The amount of time it takes for the hit object to completely fade in is also reliant on the approach rate:
+
+    AR < 5: fade_in = 800ms + 400ms * (5 - AR) / 5
+    AR = 5: fade_in = 800ms
+    AR > 5: fade_in = 800ms - 500ms * (AR - 5) / 5
+
+In osu!, circle size changes the size of hit circles and sliders, with higher values creating smaller hit objects. Spinners are unaffected by circle size. Circle size is derived through the following formula:
+
+r = 54.4 - 4.48 * CS
+
+Where r is the radius measured in osu!pixels, and CS is the circle size value.
+
+There are two mods that alter circle size when activated:
+
+    Easy: Halves the CS value.
+    Hard Rock: Multiplies the CS value by 1.3, up to a maximum of 10.
+
+There are four mods that alter the approach rate when activated:
+
+    Easy: Halves the AR value.
+    Hard Rock: Multiplies the AR value by 1.4, up to a maximum of 10.
+    Double Time: The AR value is not affected, but due to the 50% play speed increase, hit objects stay on screen for 33% less time.
+    Half Time: The AR value is not affected, but due to the 25% play speed decrease, hit objects stay on screen for 33% more time.
+
+
+
+In osu!, (along with the increase in difficulty settings) the Hard Rock mod flips the beatmap on it's X-axis
+
+While Half Time and Double Time do not change the AR value, the speed difference leads to an apparent AR change. HT/DT ARs are commonly referred to in terms of their perceived value. For example, "AR 8 + DT" may also be written as "AR 9.6".

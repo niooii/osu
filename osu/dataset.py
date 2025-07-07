@@ -1,6 +1,7 @@
 import math
 import os
 import pickle
+import random
 import re
 from glob import escape as glob_escape, glob
 
@@ -16,25 +17,28 @@ import osu.rulesets.hitobjects as hitobjects
 import osu.rulesets.replay as osu_replay
 
 # Constants
-BATCH_LENGTH    = 2048
-FRAME_RATE      = 24
+BATCH_LENGTH = 2048
+FRAME_RATE = 24
 
 # Feature index
-INPUT_FEATURES  = ['x', 'y', 'visible', 'is_slider', 'is_spinner']
+INPUT_FEATURES = ['x', 'y', 'visible', 'is_slider', 'is_spinner']
 OUTPUT_FEATURES = ['x', 'y']
 
 # Default beatmap frame information
 _DEFAULT_BEATMAP_FRAME = (
-    osu_core.SCREEN_WIDTH / 2, osu_core.SCREEN_HEIGHT / 2, # x, y
-    float("inf"), False, False # time_left, is_slider, is_spinner
+    osu_core.SCREEN_WIDTH / 2, osu_core.SCREEN_HEIGHT / 2,  # x, y
+    float("inf"), False, False  # time_left, is_slider, is_spinner
 )
 
-def pt_pad_sequences(data, maxlen, value=0):
+
+def pt_pad_sequences(data, maxlen, value=_DEFAULT_BEATMAP_FRAME):
     if not data:
         return np.array([])
 
     # Convert to list of tensors
     tensor_list = [torch.tensor(seq, dtype=torch.float) for seq in data]
+    # print(f'tensor list len: {len(tensor_list)}')
+    # print(f'tensor list (first element) shape: {tensor_list[0].shape}')
 
     # Pad sequences
     padded = pad_sequence(tensor_list, batch_first=True, padding_value=value)
@@ -43,10 +47,17 @@ def pt_pad_sequences(data, maxlen, value=0):
     if padded.size(1) > maxlen:
         padded = padded[:, :maxlen]
     elif padded.size(1) < maxlen:
-        padding_tuple = (0, maxlen - padded.size(1))
+        pad = maxlen - padded.size(1)
+        # print(f'erm padding by {pad}?')
+        padding_tuple = (0, 0, 0, pad)
+        # print(f'padding tuple: {padding_tuple}')
         padded = torch.nn.functional.pad(padded, padding_tuple, value=value)
 
+    # print(f'padded tensor list len: {len(padded)}')
+    # print(f'padded tensor list (first element) shape: {padded[0].shape}')
+
     return padded.numpy()
+
 
 def all_files(osu_path, limit=0, verbose=False):
     """Return a pandas DataFrame mapping replay files to beatmap files"""
@@ -56,7 +67,7 @@ def all_files(osu_path, limit=0, verbose=False):
         replays = replays[:limit]
 
     beatmaps = []
-    for i in tqdm.tqdm(range(len(replays)-1, -1, -1), disable=not verbose):
+    for i in tqdm.tqdm(range(len(replays) - 1, -1, -1), disable=not verbose):
 
         beatmap = _get_replay_beatmap_file(osu_path, replays[i])
 
@@ -83,12 +94,19 @@ def load(files, verbose=0) -> pd.DataFrame:
     replays = []
     beatmaps = []
 
+    beatmap_cache = dict()
+
     for index, row in tqdm.tqdm(files.iterrows(), disable=not verbose):
         try:
             replay = osu_replay.load(row['replay'])
-            # assert not replay.has_mods(osu_replay.Mod.DT, osu_replay.Mod.HR),\
-            #         "DT and HR are not supported yet"
-            beatmap = osu_beatmap.load(row['beatmap'])
+            if replay.has_mods(osu_replay.Mod.DT, osu_replay.Mod.HR, osu_replay.Mod.HT, osu_replay.Mod.EZ):
+                print('HR, DT, EZ, HT are not supported yet.')
+                continue
+            replays.append(replay)
+            if row['beatmap'] not in beatmap_cache:
+                beatmap_cache[row['beatmap']] = osu_beatmap.load(row['beatmap'])
+
+            beatmaps.append(beatmap_cache[row['beatmap']])
 
         except Exception as e:
             if verbose:
@@ -96,85 +114,11 @@ def load(files, verbose=0) -> pd.DataFrame:
                 print("\tFailed:", e)
             continue
 
-        replays.append(replay)
-        beatmaps.append(beatmap)
-
     return pd.DataFrame(list(zip(replays, beatmaps)), columns=['replay', 'beatmap'])
+
 
 _memo = {}
 
-def get_beatmap_time_data(beatmap) -> []:
-    if beatmap in _memo:
-        return _memo[beatmap]
-
-    if len(beatmap.hit_objects) == 0:
-        return None
-
-    _memo[beatmap] = []
-    data = []
-    chunk = []
-    preempt, _ = beatmap.approach_rate()
-    last_ok_frame = None  # Last frame with at least one visible object
-
-    for time in range(beatmap.start_offset(), beatmap.length(), FRAME_RATE):
-        frame = _beatmap_frame(beatmap, time)
-
-        if frame is None:
-            if last_ok_frame is None:
-                frame = _DEFAULT_BEATMAP_FRAME
-            else:
-                frame = list(last_ok_frame)
-                frame[2] = float("inf")
-        else:
-            last_ok_frame = frame
-
-        px, py, time_left, is_slider, is_spinner = frame
-
-        chunk.append(np.array([
-            px - 0.5,
-            py - 0.5,
-            time_left < preempt,
-            is_slider,
-            is_spinner
-        ]))
-
-        if len(chunk) == BATCH_LENGTH:
-            data.append(chunk)
-            _memo[beatmap].append(chunk)
-            chunk = []
-
-    if len(chunk) > 0:
-        data.append(chunk)
-        _memo[beatmap].append(chunk)
-
-    return data
-
-def input_data(dataset, verbose=False) -> pd.DataFrame:
-    """Given a osu! ruleset dataset for replays and maps, generate a
-    new DataFrame with beatmap object information across time."""
-
-    data = []
-    global _memo
-
-    if isinstance(dataset, osu_beatmap.Beatmap):
-        beatmaps_list = [(dataset,)]
-        dataset = pd.DataFrame(beatmaps_list, columns=['beatmap'])
-
-    beatmaps = dataset['beatmap']
-
-    for index, beatmap in tqdm.tqdm(beatmaps.items(), disable=not verbose):
-        chunks = get_beatmap_time_data(beatmap)
-        if chunks is not None:
-            data.extend(chunks)
-
-    data = pt_pad_sequences(data, maxlen=BATCH_LENGTH, value=0)
-
-    index = pd.MultiIndex.from_product([
-        range(len(data)), range(BATCH_LENGTH)
-        ], names=['chunk', 'frame'])
-
-    data = np.reshape(data, (-1, len(INPUT_FEATURES)))
-    return pd.DataFrame(data, index=index, columns=INPUT_FEATURES, dtype=np.float32)
 
 # extract the data for a single replay
 def replay_to_output_data(beatmap: osu_beatmap.Beatmap, replay: osu_replay.Replay):
@@ -194,6 +138,7 @@ def replay_to_output_data(beatmap: osu_beatmap.Beatmap, replay: osu_replay.Repla
         target_data.append(chunk)
 
     return target_data
+
 
 def target_data(dataset: pd.DataFrame, verbose=False):
     """Given a osu! ruleset dataset for replays and maps, generate a
@@ -224,7 +169,8 @@ def target_data(dataset: pd.DataFrame, verbose=False):
 
     data = pt_pad_sequences(target_data, maxlen=BATCH_LENGTH, value=0)
     index = pd.MultiIndex.from_product([range(len(data)), range(BATCH_LENGTH)], names=['chunk', 'frame'])
-    return pd.DataFrame(np.reshape(data, (-1, len(OUTPUT_FEATURES))), index=index, columns=OUTPUT_FEATURES, dtype=np.float32)
+    return pd.DataFrame(np.reshape(data, (-1, len(OUTPUT_FEATURES))), index=index, columns=OUTPUT_FEATURES,
+                        dtype=np.float32)
 
 
 def _list_all_replays(osu_path):
@@ -292,3 +238,133 @@ def _replay_frame(beatmap, replay, time):
     x = max(0, min(x / osu_core.SCREEN_WIDTH, 1))
     y = max(0, min(y / osu_core.SCREEN_HEIGHT, 1))
     return x, y
+
+
+def get_beatmap_time_data(beatmap) -> []:
+    if beatmap in _memo:
+        return _memo[beatmap]
+
+    if len(beatmap.hit_objects) == 0:
+        return None
+
+    _memo[beatmap] = []
+    data = []
+    chunk = []
+    preempt, _ = beatmap.approach_rate()
+    last_ok_frame = None  # Last frame with at least one visible object
+
+    for time in range(beatmap.start_offset(), beatmap.length(), FRAME_RATE):
+        frame = _beatmap_frame(beatmap, time)
+
+        if frame is None:
+            if last_ok_frame is None:
+                frame = _DEFAULT_BEATMAP_FRAME
+            else:
+                frame = list(last_ok_frame)
+                frame[2] = float("inf")
+        else:
+            last_ok_frame = frame
+
+        px, py, time_left, is_slider, is_spinner = frame
+
+        chunk.append(np.array([
+            px - 0.5,
+            py - 0.5,
+            time_left < preempt,
+            is_slider,
+            is_spinner
+        ]))
+
+        if len(chunk) == BATCH_LENGTH:
+            data.append(chunk)
+            _memo[beatmap].append(chunk)
+            chunk = []
+
+    if len(chunk) > 0:
+        data.append(chunk)
+        _memo[beatmap].append(chunk)
+
+    # print(_memo[beatmap])
+    # print(len(_memo[beatmap]))
+
+    # debug quick loop
+    # np_data = np.array(data)
+
+    # bad_frames = []
+    # for chunk in data:
+    #     print(f'frames: {len(chunk)}')
+    #     for frame in chunk:
+    #         # print(frame)
+    #         if len(frame) != 5:
+    #             bad_frames.append(frame)
+    #
+    # print("BAD FRAMES:")
+    # print(bad_frames)
+
+    return data
+
+
+def input_data(dataset, verbose=False) -> pd.DataFrame:
+    """Given a osu! ruleset dataset for replays and maps, generate a
+    new DataFrame with beatmap object information across time."""
+
+    data = []
+    global _memo
+
+    if isinstance(dataset, osu_beatmap.Beatmap):
+        beatmaps_list = [(dataset,)]
+        dataset = pd.DataFrame(beatmaps_list, columns=['beatmap'])
+
+    beatmaps = dataset['beatmap']
+
+    for index, beatmap in tqdm.tqdm(beatmaps.items(), disable=not verbose):
+        chunks = get_beatmap_time_data(beatmap)
+        if chunks is not None:
+            data.extend(chunks)
+
+    # print(f'padding this data:')
+    # print(data)
+    data = pt_pad_sequences(data, maxlen=BATCH_LENGTH, value=0)
+
+    index = pd.MultiIndex.from_product([
+        range(len(data)), range(BATCH_LENGTH)
+    ], names=['chunk', 'frame'])
+
+    # print(data.shape)
+    data = np.reshape(data, (-1, len(INPUT_FEATURES)))
+    return pd.DataFrame(data, index=index, columns=INPUT_FEATURES, dtype=np.float32)
+
+
+import json
+
+
+def replay_mapping_from_cache(limit: int = None, shuffle: bool = False) -> pd.DataFrame:
+    replay_cache_path = '.data/replays'
+
+    files = os.listdir(replay_cache_path)
+
+    if shuffle:
+        random.shuffle(files)
+
+    df = pd.DataFrame(columns=['replay', 'beatmap'])
+
+    i = 0
+    for path in files:
+        if limit is not None and i == limit:
+            break
+        if not path.endswith('.meta'):
+            continue
+
+        metafile_path = os.path.join(replay_cache_path, path)
+
+        replay_path = metafile_path.replace('.meta', '.osr')
+
+        with open(metafile_path, 'r') as metafile:
+            meta_json = json.loads(metafile.read())
+
+        map_path = meta_json['map']
+        df_ = pd.DataFrame([(replay_path, map_path)], columns=['replay', 'beatmap'])
+        df = pd.concat([df, df_])
+        i += 1
+
+    return load(df)

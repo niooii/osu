@@ -1,3 +1,5 @@
+import re
+import io
 import requests
 from bs4 import BeautifulSoup
 import json
@@ -8,6 +10,8 @@ from typing import Literal, Callable
 from dotenv import load_dotenv
 import pandas as pd
 import time
+import shutil
+import hashlib
 
 load_dotenv()
 
@@ -16,16 +20,17 @@ osu_session = os.getenv("OSU_SESSION")
 APP_DATA = os.getenv("APPDATA")
 OSU_PATH = f'{APP_DATA}/../Local/osu!'
 
-print(OSU_PATH)
+print(f'osu! path: {OSU_PATH}')
 
 os.makedirs('../.data/replays', exist_ok=True)
 
 
 # TODO we can make this async and then batch the donwloads, but nah im too lazy
-def get_replay(score_id: int) -> replay.Replay:
-    save_path = f"../.data/replays/{score_id}.osr"
+# TODO add cache to map beatmaps to the replays
+def get_replay(score_id: int, map_md5: str) -> (replay.Replay, int):
+    save_path = f".data/replays/{score_id}.osr"
     if os.path.exists(save_path):
-        return replay.load(save_path)
+        return (replay.load(save_path), score_id)
 
     url = f'https://osu.ppy.sh/scores/{score_id}/download'
     retry_times = 0
@@ -40,7 +45,7 @@ def get_replay(score_id: int) -> replay.Replay:
             return None
         print(f'osu responded with status code {response.status_code} for replay {score_id}, waiting a few secs')
         while retry_times < 5 and response.status_code // 100 != 2:
-            time.sleep(4)
+            time.sleep(4 * (retry_times + 1))
             response = requests.get(url, headers=headers)
             if response.status_code == 404:
                 return None
@@ -51,15 +56,27 @@ def get_replay(score_id: int) -> replay.Replay:
         if retry_times == 5:
             print(f'retried 5 or so times for replay {score_id}, stopping. check osu session.')
             return None
+
+    rp = replay.Replay(io.BytesIO(response.content))
+    if rp.map_md5 != map_md5:
+        print(f'replay {score_id}: mismatching hash.')
+        return None
+
     # save to disk cache
     with open(save_path, 'wb') as file:
         file.write(response.content)
-    return replay.load(save_path)
+
+    return (rp, score_id)
 
 
-def download_t50_replays(beatmap_id: int, max: int = 50, only: Literal['FC', 'S', 'ALL'] = 'S') -> list[replay.Replay]:
+def download_t50_replays(beatmap: beatmap.Beatmap, cache_map_path: str, map_md5: str, max: int = 50, only: Literal['FC', 'S', 'ALL'] = 'S') -> \
+        list[replay.Replay]:
     retry_times = 0
+    beatmap_id = beatmap.beatmap_id()
     t50_url = f'https://osu.ppy.sh/beatmaps/{beatmap_id}/scores?mode=osu&type=global'
+
+    if not os.path.exists('.data/replays/'):
+        os.makedirs('.data/replays/')
 
     response = requests.get(t50_url)
     if response.status_code // 100 != 2:
@@ -68,7 +85,7 @@ def download_t50_replays(beatmap_id: int, max: int = 50, only: Literal['FC', 'S'
         print(f'osu responded with status code {response.status_code}, waiting a few secs')
 
         while retry_times < 5 and response.status_code // 100 != 2:
-            time.sleep(4)
+            time.sleep(4 * (retry_times + 1))
             response = requests.get(t50_url)
             if response.status_code == 404:
                 return None
@@ -99,13 +116,27 @@ def download_t50_replays(beatmap_id: int, max: int = 50, only: Literal['FC', 'S'
     replay_ids = replay_ids[0:max]
 
     # download replays
-    replays = [get_replay(id) for id in replay_ids]
+    replays = [get_replay(id, map_md5) for id in replay_ids]
+    replays = [t for t in replays if t is not None]
+
+    if replays is None:
+        print(f'Failed to download replays for map id {beatmap_id}')
+        return None
+
+    for replay, id in replays:
+        meta_path = f".data/replays/{id}.meta"
+        if not os.path.exists(meta_path):
+            with open(meta_path, 'w') as f:
+                f.write(json.dumps({'map': cache_map_path}))
+
+    replays = [replay for (replay, id) in replays]
 
     return replays
 
 
 def download_local_mapset_t50_replays(mapset_folder: str, filter: None | Callable[[beatmap.Beatmap], bool] = None,
                                       **kwargs) -> pd.DataFrame:
+    mapset_folder_name = mapset_folder
     mapset_folder = f'{OSU_PATH}/Songs/{mapset_folder}'
     files = os.listdir(mapset_folder)
     maps = []
@@ -116,7 +147,8 @@ def download_local_mapset_t50_replays(mapset_folder: str, filter: None | Callabl
             continue
 
         print(f'loading {path}')
-        mp = beatmap.load(f'{mapset_folder}/{path}')
+        map_path = f'{mapset_folder}/{path}'
+        mp = beatmap.load(map_path)
 
         if mp.beatmap_id() is None:
             continue
@@ -125,13 +157,23 @@ def download_local_mapset_t50_replays(mapset_folder: str, filter: None | Callabl
             if not filter(mp):
                 continue
 
-        downloaded_replays = download_t50_replays(mp.beatmap_id(), **kwargs)
+        cache_map_path = f'.data/songs/{mapset_folder_name}/{mp.beatmap_id()}_{path}'
+
+        with open(map_path, 'rb') as f:
+            hash = hashlib.md5(f.read()).hexdigest()
+
+        downloaded_replays = download_t50_replays(mp, cache_map_path=cache_map_path, map_md5=hash, **kwargs)
         if downloaded_replays is None:
             continue
 
         for rp in downloaded_replays:
             maps.append(mp)
             replays.append(rp)
+
+        if len(downloaded_replays) > 0:
+            if not os.path.exists(cache_map_path):
+                os.makedirs(os.path.dirname(cache_map_path), exist_ok=True)
+                shutil.copyfile(map_path, cache_map_path)
 
     return pd.DataFrame(list(zip(replays, maps)), columns=['replay', 'beatmap'])
 
@@ -140,12 +182,19 @@ def download_local_mapset_t50_replays(mapset_folder: str, filter: None | Callabl
 def download_mapsets(mapset_folders: list[str], **kwargs):
     dataframe = pd.DataFrame(columns=['replay', 'beatmap'])
     for mapset_folder in mapset_folders:
+        # if the mapset folder doesn't start with a number, chances are it won't have useful metadata in the maps anyways
+        pattern = r'^(\d+) '
+        match = re.match(pattern, mapset_folder)
+        if not match or int(match.group(1)) < 100000:
+            print(f'Skipping folder {mapset_folder}')
+            continue
         df = download_local_mapset_t50_replays(mapset_folder, **kwargs)
         if df is not None:
+            print(f'Got {len(df)} replays that meet the criteria.')
             dataframe = pd.concat([dataframe, df])
 
     return dataframe
 
 
-def download_mapset_t50_replays(mapset_id: int, above_stars: float, **kwargs):
-    pass
+def get_all_mapset_folders_on_disk() -> list[str]:
+    return os.listdir(f'{OSU_PATH}/Songs/')
