@@ -257,6 +257,173 @@ class Beatmap:
         return objects
 
 
+# Try to import Rust acceleration once at module level
+try:
+    import osu_fast
+    _RUST_AVAILABLE = True
+except ImportError:
+    _RUST_AVAILABLE = False
+
+def _convert_rust_beatmap(rust_data):
+    """Convert Rust beatmap data to Python Beatmap object"""
+    # Create a beatmap object directly from the structured data
+    class FastBeatmap(Beatmap):
+        def __init__(self, data):
+            # Skip parent constructor and initialize directly
+            self.format_version = "osu file format v14\n"
+            self.sections = {}
+            self.dt = False
+            self.hr = False
+            self.ez = False
+            self.ht = False
+            
+            # Set up difficulty section
+            difficulty = {}
+            difficulty['ApproachRate'] = data.get('ApproachRate', 5.0)
+            difficulty['CircleSize'] = data.get('CircleSize', 4.0) 
+            difficulty['HPDrainRate'] = data.get('HPDrainRate', 5.0)
+            difficulty['OverallDifficulty'] = data.get('OverallDifficulty', 5.0)
+            difficulty['SliderMultiplier'] = data.get('SliderMultiplier', 1.4)
+            difficulty['SliderTickRate'] = data.get('SliderTickRate', 1.0)
+            difficulty['AudioLeadIn'] = data.get('AudioLeadIn', 0)
+            self.sections['difficulty'] = difficulty
+            
+            # Convert timing points
+            if 'timing_points' in data:
+                self.timing_points = list(map(timing_points.create, data['timing_points']))
+            else:
+                self.timing_points = []
+            
+            # Convert hit objects
+            if 'hit_objects' in data:
+                self.hit_objects = list(map(hitobjects.create, data['hit_objects']))
+            else:
+                self.hit_objects = []
+        
+        def combo_color(self, new_combo, combo_skip):
+            return (255, 0, 0)
+
+        def __getattr__(self, key):
+            if key in self.sections:
+                return self.sections[key]
+            else:
+                return []
+
+        def __getitem__(self, key):
+            for section in self.sections.values():
+                if key in section:
+                    return section[key]
+            return None
+
+        def apply_mods(self, mods: list[str]):
+            for mod in mods:
+                mod = mod.lower()
+                if mod != 'dt' and mod != 'hr' and mod != 'ez' and mod != 'ht':
+                    raise ValueError(f"Invalid mod: {mod}. Only 'dt', 'hr', 'ez', and 'ht' are accepted/used.")
+
+                if mod == 'dt':
+                    self.dt = True
+                elif mod == 'hr':
+                    self.hr = True
+                elif mod == 'ez':
+                    self.ez = True
+                elif mod == 'ht':
+                    self.ht = True
+
+        def approach_rate(self):
+            ar = self["ApproachRate"]
+            if ar <= 5:
+                preempt = 1200 + 600 * (5 - ar) / 5
+                fade_in = 800 + 400 * (5 - ar) / 5
+            else:
+                preempt = 1200 - 750 * (ar - 5) / 5
+                fade_in = 800 - 500 * (ar - 5) / 5
+            return preempt, fade_in
+
+        def circle_radius(self):
+            return 27.2 - 2.24 * self['CircleSize']
+
+        def start_offset(self):
+            preempt, _ = self.approach_rate()
+            return int(self.hit_objects[0].time - preempt)
+
+        def length(self):
+            if len(self.hit_objects) == 0:
+                return 0
+            last_obj = self.hit_objects[-1]
+            beat_duration = self.beat_duration(last_obj.time)
+            return int(last_obj.time + last_obj.duration(beat_duration, self['SliderMultiplier']))
+
+        def _timing(self, time):
+            bpm = None
+            i = bsearch(self.timing_point, time, lambda tp: tp.time)
+            timing_point = self.timing_points[i - 1]
+
+            for tp in self.timing_points[i:]:
+                if tp.offset > time:
+                    break
+                if tp.bpm > 0:
+                    bpm = tp.bpm
+                timing_point = tp
+
+            while i >= 0 and bpm is None:
+                i -= 1
+                if self.timing_points[i].bpm > 0:
+                    bpm = self.timing_points[i].bpm
+
+            return bpm or 120, timing_point
+
+        def beat_duration(self, time):
+            bpm, timing_point = self._timing(time)
+            beat_duration = timing_point.bpm
+            if beat_duration < 0:
+                return bpm * -beat_duration / 100
+            return beat_duration
+
+        def visible_objects(self, time, count=None):
+            objects = []
+            preempt, _ = self.approach_rate()
+
+            i = bsearch(self.hit_objects, time, lambda obj: obj.time + preempt - obj.duration(self.beat_duration(obj.time),
+                                                                                              self['SliderMultiplier']))
+            i -= 5
+            if i < 0:
+                i = 0
+
+            n = 0
+
+            for obj in self.hit_objects[i:]:
+                obj_duration = obj.duration(self.beat_duration(obj.time), self['SliderMultiplier'])
+
+                if time > obj.time + obj_duration:
+                    continue
+                elif time < obj.time - preempt:
+                    break
+                elif time < obj.time + obj_duration:
+                    objects.append(obj)
+
+                n += 1
+                if not count is None and n >= count:
+                    return objects
+
+            return objects
+    
+    return FastBeatmap(rust_data)
+
 def load(filename):
+    # TODO the downloader.py file does not work with the rust implementation (missing beatmap id?)
+    # if _RUST_AVAILABLE:
+    #     try:
+    #         rust_beatmap = osu_fast.parse_beatmap_fast(filename)
+    #         # Convert Rust result to Python Beatmap object
+    #         beatmap = _convert_rust_beatmap(rust_beatmap)
+    #         beatmap._file_path = filename
+    #         return beatmap
+    #     except Exception:
+    #         # Fall back to Python implementation on any error
+    #         pass
+
     with open(filename, 'r', encoding='utf8') as file:
-        return Beatmap(file)
+        beatmap = Beatmap(file)
+        beatmap._file_path = filename  # Store file path for Rust acceleration
+        return beatmap

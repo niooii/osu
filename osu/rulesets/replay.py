@@ -98,6 +98,91 @@ class Replay:
 
         return self.data[index][1:]
 
+# Try to import Rust acceleration once at module level
+try:
+    import osu_fast
+    _RUST_AVAILABLE = True
+except ImportError:
+    _RUST_AVAILABLE = False
+
+def _convert_rust_replay(rust_data):
+    """Convert Rust replay data to Python Replay object"""
+    # Create a new Replay object and populate it with Rust data
+    class FastReplay:
+        def __init__(self, data):
+            # Set attributes directly from structured data
+            self.game_mode = data.get('game_mode', 0)
+            self.osu_version = data.get('osu_version', 0)
+            self.map_md5 = data.get('map_md5', '')
+            self.player = data.get('player', '')
+            self.replay_md5 = data.get('replay_md5', '')
+            
+            # Score data
+            self.n_300s = data.get('n_300s', 0)
+            self.n_100s = data.get('n_100s', 0)
+            self.n_50s = data.get('n_50s', 0)
+            self.n_geki = data.get('n_geki', 0)
+            self.n_katu = data.get('n_katu', 0)
+            self.n_misses = data.get('n_misses', 0)
+            self.score = data.get('score', 0)
+            self.max_combo = data.get('max_combo', 0)
+            self.perfect = data.get('perfect', False)
+            
+            # Calculate accuracy like in Python constructor
+            total = self.n_300s + self.n_100s + self.n_50s + self.n_misses
+            if total > 0:
+                self.accuracy = (self.n_300s + self.n_100s / 3 + self.n_50s / 6) / total
+            else:
+                self.accuracy = 0.0
+            
+            # Convert mods to Mod enum
+            self.mods = Mod(data.get('mods_int', 0))
+            
+            # Life graph and timestamp
+            self.life_graph = data.get('life_graph', '').split(',')[:-1] if data.get('life_graph') else []
+            if self.life_graph:
+                self.life_graph = [t.split('|') for t in self.life_graph]
+            self.timestamp = data.get('timestamp', 0)
+            
+            # Frame data - already in the correct format
+            self.data = data.get('data', [])
+            # Ensure data is sorted by time
+            self.data = list(sorted(self.data))
+            
+        def has_mods(self, *mods):
+            mask = reduce(lambda x, y: x|y, mods)
+            return bool(self.mods & mask)
+            
+        def frame(self, time):
+            index = bsearch(self.data, time, lambda f: f[0])
+            
+            offset, _, _, _ = self.data[index]
+            if offset > time:
+                if index > 0:
+                    return self.data[index - 1][1:]
+                else:
+                    return (0, 0, 0)
+            elif index >= len(self.data):
+                index = -1
+
+            return self.data[index][1:]
+    
+    return FastReplay(rust_data)
+
 def load(filename):
+    # Try to use Rust acceleration if available
+    if _RUST_AVAILABLE:
+        try:
+            rust_replay = osu_fast.parse_replay_fast(filename)
+            # Convert Rust result to Python Replay object
+            replay = _convert_rust_replay(rust_replay)
+            replay._file_path = filename
+            return replay
+        except Exception:
+            # Fall back to Python implementation on any error
+            pass
+
     with open(filename, "rb") as file:
-        return Replay(file)
+        replay = Replay(file)
+        replay._file_path = filename  # Store file path for Rust acceleration
+        return replay

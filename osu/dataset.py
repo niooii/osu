@@ -16,6 +16,17 @@ import osu.rulesets.core as osu_core
 import osu.rulesets.hitobjects as hitobjects
 import osu.rulesets.replay as osu_replay
 
+# Try to import the Rust acceleration module
+try:
+    import osu_fast
+    RUST_AVAILABLE = True
+    print("Rust acceleration available!")
+except ImportError:
+    RUST_AVAILABLE = False
+    print("Rust acceleration not available, falling back to Python")
+
+RUST_AVAILABLE = False
+
 # Constants
 BATCH_LENGTH = 2048
 FRAME_RATE = 24
@@ -96,11 +107,12 @@ def load(files, verbose=0) -> pd.DataFrame:
 
     beatmap_cache = dict()
 
-    for index, row in tqdm.tqdm(files.iterrows(), disable=not verbose):
+    for index, row in tqdm.tqdm(files.iterrows(), desc='Loading objects from .data/', total=len(files)):
         try:
             replay = osu_replay.load(row['replay'])
             if replay.has_mods(osu_replay.Mod.DT, osu_replay.Mod.HR, osu_replay.Mod.HT, osu_replay.Mod.EZ):
-                print('HR, DT, EZ, HT are not supported yet.')
+                if verbose:
+                    print('HR, DT, EZ, HT are not supported yet.')
                 continue
             replays.append(replay)
             if row['beatmap'] not in beatmap_cache:
@@ -146,13 +158,42 @@ def target_data(dataset: pd.DataFrame, verbose=False):
 
     target_data = []
 
-    for index, row in tqdm.tqdm(dataset.iterrows(), disable=not verbose):
+    for index, row in tqdm.tqdm(dataset.iterrows(), desc='Turning replays into time series data', total=len(dataset)):
         replay = row['replay']
         beatmap = row['beatmap']
 
         if len(beatmap.hit_objects) == 0:
             continue
 
+        # Try using Rust acceleration if available
+        if RUST_AVAILABLE and hasattr(replay, '_file_path'):
+            try:
+                frames = osu_fast.generate_replay_frames_exact(
+                    replay._file_path,
+                    beatmap.start_offset(),
+                    beatmap.length(),
+                    FRAME_RATE,
+                    osu_core.SCREEN_WIDTH,
+                    osu_core.SCREEN_HEIGHT
+                )
+                
+                # Convert to the same format as Python version
+                chunk = []
+                for frame in frames:
+                    chunk.append(np.array(frame, dtype=np.float32))
+                    if len(chunk) == BATCH_LENGTH:
+                        target_data.append(chunk)
+                        chunk = []
+                
+                if len(chunk) > 0:
+                    target_data.append(chunk)
+                
+                continue
+                
+            except Exception as e:
+                print(f"Rust acceleration failed for replay, falling back to Python: {e}")
+
+        # Fallback to Python implementation
         chunk = []
 
         for time in range(beatmap.start_offset(), beatmap.length(), FRAME_RATE):
@@ -247,11 +288,42 @@ def get_beatmap_time_data(beatmap) -> []:
     if len(beatmap.hit_objects) == 0:
         return None
 
+    # Try using Rust acceleration if available
+    if RUST_AVAILABLE and hasattr(beatmap, '_file_path'):
+        try:
+            frames = osu_fast.generate_beatmap_frames_exact(
+                beatmap._file_path,
+                beatmap.start_offset(),
+                beatmap.length(),
+                FRAME_RATE,
+                osu_core.SCREEN_WIDTH,
+                osu_core.SCREEN_HEIGHT
+            )
+
+            # Convert to the same format as Python version
+            data = []
+            chunk = []
+            for frame in frames:
+                chunk.append(np.array(frame, dtype=np.float32))
+                if len(chunk) == BATCH_LENGTH:
+                    data.append(chunk)
+                    chunk = []
+            
+            if len(chunk) > 0:
+                data.append(chunk)
+            
+            _memo[beatmap] = data
+            return data
+            
+        except Exception as e:
+            print(f"Rust acceleration failed, falling back to Python: {e}")
+
+    # Fallback to Python implementation
     _memo[beatmap] = []
     data = []
     chunk = []
     preempt, _ = beatmap.approach_rate()
-    last_ok_frame = None  # Last frame with at least one visible object
+    last_ok_frame = None
 
     for time in range(beatmap.start_offset(), beatmap.length(), FRAME_RATE):
         frame = _beatmap_frame(beatmap, time)
@@ -284,23 +356,6 @@ def get_beatmap_time_data(beatmap) -> []:
         data.append(chunk)
         _memo[beatmap].append(chunk)
 
-    # print(_memo[beatmap])
-    # print(len(_memo[beatmap]))
-
-    # debug quick loop
-    # np_data = np.array(data)
-
-    # bad_frames = []
-    # for chunk in data:
-    #     print(f'frames: {len(chunk)}')
-    #     for frame in chunk:
-    #         # print(frame)
-    #         if len(frame) != 5:
-    #             bad_frames.append(frame)
-    #
-    # print("BAD FRAMES:")
-    # print(bad_frames)
-
     return data
 
 
@@ -317,13 +372,11 @@ def input_data(dataset, verbose=False) -> pd.DataFrame:
 
     beatmaps = dataset['beatmap']
 
-    for index, beatmap in tqdm.tqdm(beatmaps.items(), disable=not verbose):
+    for index, beatmap in tqdm.tqdm(beatmaps.items(), desc='Turning beatmaps into time series data', total=len(beatmaps)):
         chunks = get_beatmap_time_data(beatmap)
         if chunks is not None:
             data.extend(chunks)
 
-    # print(f'padding this data:')
-    # print(data)
     data = pt_pad_sequences(data, maxlen=BATCH_LENGTH, value=0)
 
     index = pd.MultiIndex.from_product([
@@ -336,24 +389,24 @@ def input_data(dataset, verbose=False) -> pd.DataFrame:
 
 
 import json
+import tqdm
 
 
 def replay_mapping_from_cache(limit: int = None, shuffle: bool = False) -> pd.DataFrame:
     replay_cache_path = '.data/replays'
 
     files = os.listdir(replay_cache_path)
+    metafiles = [f for f in files if f.endswith('.meta')]
 
     if shuffle:
         random.shuffle(files)
 
-    df = pd.DataFrame(columns=['replay', 'beatmap'])
+    rows = []
 
     i = 0
-    for path in files:
+    for path in tqdm.tqdm(metafiles, desc='Loading replay metadata from .data/replays', total=limit or len(metafiles)):
         if limit is not None and i == limit:
             break
-        if not path.endswith('.meta'):
-            continue
 
         metafile_path = os.path.join(replay_cache_path, path)
 
@@ -363,8 +416,12 @@ def replay_mapping_from_cache(limit: int = None, shuffle: bool = False) -> pd.Da
             meta_json = json.loads(metafile.read())
 
         map_path = meta_json['map']
-        df_ = pd.DataFrame([(replay_path, map_path)], columns=['replay', 'beatmap'])
-        df = pd.concat([df, df_])
+        if not os.path.exists(map_path) or not os.path.exists(replay_path):
+            continue
+
+        rows.append((replay_path, map_path))
         i += 1
+
+    df = pd.DataFrame(rows, columns=['replay', 'beatmap'])
 
     return load(df)
