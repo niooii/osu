@@ -1,6 +1,5 @@
 from typing import List
 
-import win32gui, win32process
 from pymem import pattern, Pymem
 import os
 
@@ -173,16 +172,8 @@ def _pattern_converter(patt: str) -> bytes:
 
 
 class OSUController:
-    def __init__(self, osu_window_title: str = "osu!"):
-        # search for osu pid
-        # hwnd = win32gui.FindWindow(None, osu_window_title)
-        #
-        # if hwnd is None or hwnd == 0:
-        #     raise Exception(f"Cannot find osu window. Given name: {osu_window_title}")
-        #
-        # threadid, pid = win32process.GetWindowThreadProcessId(hwnd)
-
-        pm = Pymem("osu!.exe")
+    def __init__(self, process_name: str = "osu!.exe"):
+        pm = Pymem(process_name)
         self._pm = pm
         self._signatures = OSUMemorySignatures.get_all_signatures()
         self.base_addresses = dict()
