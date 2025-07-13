@@ -8,17 +8,29 @@ import mutagen.mp3
 from osu.rulesets.core import SCREEN_HEIGHT, SCREEN_WIDTH
 from osu.preview import beatmap as beatmap_preview
 from osu.rulesets import beatmap as bm
+from osu.rulesets import replay as replay_module
+from osu import dataset
 
 
-def preview_replay(ia_replay, beatmap: bm.Beatmap, audio_file=None):
+def preview_replay_raw(ia_replay, beatmap_path: str, mods=None, audio_file=None):
     """
-    Preview a replay with beatmap visualization
+    Preview a replay with beatmap visualization using raw replay data
 
     Args:
         ia_replay: numpy array of replay data
-        beatmap: loaded beatmap object
+        beatmap: loaded beatmap object (will be copied to avoid modification)
+        mods: list of mod strings to apply (e.g., ['dt', 'hr']) (optional)
         audio_file: path to audio file (optional)
     """
+    
+    beatmap = bm.load(beatmap_path)
+
+    # Apply mods to beatmap copy if provided
+    if mods:
+        beatmap.apply_mods(mods)
+        
+    # TODO: DT/HT timing effects need proper implementation
+    # Should affect game clock speed, audio speed, and replay timing
 
     # Setup audio
     if audio_file and os.path.exists(audio_file):
@@ -49,6 +61,7 @@ def preview_replay(ia_replay, beatmap: bm.Beatmap, audio_file=None):
     trail = []
 
     if audio_file and os.path.exists(audio_file):
+        # Note: pygame doesn't support speed changes, so audio won't match DT/HT timing
         pygame.mixer.music.play(start=beatmap['AudioLeadIn'] / 1000)
 
     running = True
@@ -61,14 +74,15 @@ def preview_replay(ia_replay, beatmap: bm.Beatmap, audio_file=None):
     progress_end_time = 0    # Time when last object is hit
     
     # Calculate progress bar timing
-    if beatmap.hit_objects:
+    if beatmap.effective_hit_objects:
         # Find first visible object time (considering approach time)
-        first_obj = beatmap.hit_objects[0]
-        preempt, _ = beatmap.approach_rate()
-        progress_start_time = first_obj.time - preempt
+        first_obj = beatmap.effective_hit_objects[0]
+
+        base_preempt, _ = beatmap.base_approach_rate_timing()
+        progress_start_time = first_obj.time - base_preempt
         
         # Find last object hit time
-        last_obj = beatmap.hit_objects[-1]
+        last_obj = beatmap.effective_hit_objects[-1]
         if hasattr(last_obj, 'end_time'):
             progress_end_time = last_obj.end_time
         else:
@@ -153,6 +167,7 @@ def preview_replay(ia_replay, beatmap: bm.Beatmap, audio_file=None):
         # pygame.draw.circle(screen, (255, 0, 0), (int(cx), int(cy)), 8)
 
         frame = int((time - beatmap.start_offset()) // REPLAY_SAMPLING_RATE)
+        # print(f'we on frame {frame}')
         if frame > 0 and frame < len(ia_replay):
             x, y = ia_replay[frame]
             x += 0.5
@@ -211,3 +226,42 @@ def preview_replay(ia_replay, beatmap: bm.Beatmap, audio_file=None):
         clock.tick(FRAME_RATE)
 
     pygame.quit()
+
+
+def preview_replay(replay: replay_module.Replay, beatmap_path: str, audio_file=None):
+    """
+    Preview a replay with beatmap visualization using a Replay object
+    
+    Args:
+        replay: Replay object loaded from .osr file
+        beatmap_path: Path to the beatmap file
+        audio_file: path to audio file (optional)
+    """
+
+    beatmap = bm.load(beatmap_path)
+    
+    # Extract mods from replay
+    mods = []
+    if replay.has_mods(replay_module.Mod.DT):
+        mods.append('dt')
+    if replay.has_mods(replay_module.Mod.HR):
+        mods.append('hr')
+    if replay.has_mods(replay_module.Mod.EZ):
+        mods.append('ez')
+    if replay.has_mods(replay_module.Mod.HT):
+        mods.append('ht')
+
+    beatmap.apply_mods(mods)
+
+    replay_data = dataset.replay_to_output_data(beatmap, replay)
+
+    # Flatten
+    ia_replay = []
+    for chunk in replay_data:
+        for frame in chunk:
+            x, y = frame[0], frame[1]
+            ia_replay.append([x, y])
+    
+    ia_replay = np.array(ia_replay)
+    
+    preview_replay_raw(ia_replay, beatmap_path=beatmap_path, mods=mods, audio_file=audio_file)

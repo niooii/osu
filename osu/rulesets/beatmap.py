@@ -93,6 +93,7 @@ class Beatmap:
         self.hr = False
         self.ez = False
         self.ht = False
+        self._hr_hit_objects_cache = None  # Cache for HR-transformed hit objects
 
         if 'timing_points' in self.sections:
             self.timing_points = list(map(timing_points.create, self.sections['timing_points']))
@@ -118,32 +119,98 @@ class Beatmap:
         return None
 
     def apply_mods(self, mods: list[str]):
+        # Reset all mods first
+        # self.dt = False
+        # self.hr = False
+        # self.ez = False
+        # self.ht = False
+        # self._hr_hit_objects_cache = None
+        
+        # Check for mutually exclusive mods
+        speed_mods = [mod for mod in mods if mod.lower() in ['dt', 'ht']]
+        difficulty_mods = [mod for mod in mods if mod.lower() in ['hr', 'ez']]
+        
+        if len(speed_mods) > 1:
+            raise ValueError(f"Speed mods DT and HT are mutually exclusive. Found: {speed_mods}")
+        if len(difficulty_mods) > 1:
+            raise ValueError(f"Difficulty mods HR and EZ are mutually exclusive. Found: {difficulty_mods}")
+        
         for mod in mods:
             mod = mod.lower()
-            if mod != 'dt' and mod != 'hr' and mod != 'ez' and mod != 'ht':
-                raise ValueError(f"Invalid mod: {mod}. Only 'dt', 'hr', 'ez', and 'ht' are accepted/used.")
+            # if mod not in ['dt', 'hr', 'ez', 'ht']:
+            #     raise ValueError(f"Invalid mod: {mod}. Only 'dt', 'hr', 'ez', and 'ht' are accepted/used.")
 
             if mod == 'dt':
                 self.dt = True
             elif mod == 'hr':
                 self.hr = True
+                self._create_hr_hit_objects_cache()
             elif mod == 'ez':
                 self.ez = True
             elif mod == 'ht':
                 self.ht = True
 
-    def approach_rate(self):
-        ar = self["ApproachRate"]
+    def get_mods(self):
+        return (self.dt, self.hr, self.ez, self.ht)
+
+    def base_approach_rate(self):
+        """Returns the unmodified approach rate value from the beatmap"""
+        return self["ApproachRate"]
+    
+    def base_approach_rate_timing(self):
+        """Returns base preempt and fade_in times without mod effects"""
+        ar = self.base_approach_rate()
+        
         if ar <= 5:
             preempt = 1200 + 600 * (5 - ar) / 5
             fade_in = 800 + 400 * (5 - ar) / 5
         else:
             preempt = 1200 - 750 * (ar - 5) / 5
             fade_in = 800 - 500 * (ar - 5) / 5
+            
+        return preempt, fade_in
+    
+    def approach_rate_value(self):
+        """Returns the approach rate value after mods are applied"""
+        ar = self.base_approach_rate()
+        if self.ez:
+            ar = ar / 2
+        elif self.hr:
+            ar = min(ar * 1.4, 10)
+        return ar
+    
+    def approach_rate(self):
+        """Returns preempt and fade_in times considering mods"""
+        ar = self.approach_rate_value()
+        
+        if ar <= 5:
+            preempt = 1200 + 600 * (5 - ar) / 5
+            fade_in = 800 + 400 * (5 - ar) / 5
+        else:
+            preempt = 1200 - 750 * (ar - 5) / 5
+            fade_in = 800 - 500 * (ar - 5) / 5
+            
+        # TODO: DT/HT timing effects need proper implementation
+        # DT should make preempt/fade_in 33% shorter, HT 33% longer
+            
         return preempt, fade_in
 
+    def base_circle_size(self):
+        """Returns the unmodified circle size value from the beatmap"""
+        return self['CircleSize']
+    
+    def circle_size(self):
+        """Returns the circle size value after mods are applied"""
+        cs = self.base_circle_size()
+        if self.ez:
+            cs = cs / 2
+        elif self.hr:
+            cs = min(cs * 1.3, 10)
+        return cs
+    
     def circle_radius(self):
-        return 27.2 - 2.24 * self['CircleSize']
+        """Returns the circle radius in osu!pixels after mods are applied"""
+        return 27.2 - 2.24 * self.circle_size()
 
     def title(self):
         return self['Title']
@@ -175,11 +242,96 @@ class Beatmap:
     def beatmap_set_id(self):
         return self['BeatmapSetID']
 
-    def hp_drain_rate(self):
+    def base_hp_drain_rate(self):
+        """Returns the unmodified HP drain rate value from the beatmap"""
         return self['HPDrainRate']
+    
+    def hp_drain_rate(self):
+        """Returns the HP drain rate value after mods are applied"""
+        hp = self.base_hp_drain_rate()
+        if self.ez:
+            hp = hp / 2
+        elif self.hr:
+            hp = min(hp * 1.4, 10)
+        return hp
 
-    def overall_difficulty(self):
+    def base_overall_difficulty(self):
+        """Returns the unmodified overall difficulty value from the beatmap"""
         return self['OverallDifficulty']
+    
+    def overall_difficulty(self):
+        """Returns the overall difficulty value after mods are applied"""
+        od = self.base_overall_difficulty()
+        if self.ez:
+            od = od / 2
+        elif self.hr:
+            od = min(od * 1.4, 10)
+        return od
+    
+    def hit_windows(self):
+        """Returns hit windows (300, 100, 50) in milliseconds after mods are applied"""
+        od = self.overall_difficulty()
+        
+        window_300 = 80 - 6 * od
+        window_100 = 140 - 8 * od
+        window_50 = 200 - 10 * od
+        
+        # TODO: DT/HT timing effects need proper implementation
+        # DT should make windows 33% shorter, HT 33% longer
+            
+        return window_300, window_100, window_50
+    
+    def transform_position(self, x, y):
+        """Transform position coordinates based on active mods"""
+        if self.hr:
+            # HR flips the beatmap vertically (around X-axis)
+            y = core.SCREEN_HEIGHT - y
+        return x, y
+    
+    def spinner_rotation_rate(self):
+        """Returns required spins per second for spinners after mods are applied"""
+        od = self.overall_difficulty()
+        
+        if od < 5:
+            rate = 5 - 2 * (5 - od) / 5
+        elif od == 5:
+            rate = 5
+        else:
+            rate = 5 + 2.5 * (od - 5) / 5
+            
+        # TODO: DT/HT timing effects need proper implementation
+        # DT should multiply rate by 1.5, HT by 0.75
+            
+        return rate
+    
+    def _create_hr_hit_objects_cache(self):
+        """Create cached HR-transformed hit objects"""
+        import copy
+        
+        self._hr_hit_objects_cache = []
+        for obj in self.hit_objects:
+            hr_obj = copy.deepcopy(obj)
+            
+            # Transform main position
+            hr_obj.y = core.SCREEN_HEIGHT - hr_obj.y
+            
+            # Transform slider curve points if it's a slider
+            if hasattr(hr_obj, 'curve_points') and hr_obj.curve_points:
+                hr_obj.curve_points = [(x, core.SCREEN_HEIGHT - y) for x, y in hr_obj.curve_points]
+                # Clear any cached curve calculations
+                if hasattr(hr_obj, '_cached_curve_points'):
+                    hr_obj._cached_curve_points = None
+                if hasattr(hr_obj, '_cached_base_curve'):
+                    hr_obj._cached_base_curve = None
+            
+            self._hr_hit_objects_cache.append(hr_obj)
+    
+    @property
+    def effective_hit_objects(self):
+        """Return HR-transformed hit objects if HR is active, otherwise normal hit objects"""
+        if self.hr and self._hr_hit_objects_cache is not None:
+            return self._hr_hit_objects_cache
+        return self.hit_objects
 
     def ar_raw(self):
         return self['ApproachRate']
@@ -190,14 +342,19 @@ class Beatmap:
     def slider_tick_rate(self):
         return self['SliderTickRate']
 
+    def base_start_offset(self):
+        """Start offset using base approach rate for timing synchronization"""
+        base_preempt, _ = self.base_approach_rate_timing()
+        return int(self.effective_hit_objects[0].time - base_preempt)
+    
     def start_offset(self):
         preempt, _ = self.approach_rate()
-        return int(self.hit_objects[0].time - preempt)
+        return int(self.effective_hit_objects[0].time - preempt)
 
     def length(self):
-        if len(self.hit_objects) == 0:
+        if len(self.effective_hit_objects) == 0:
             return 0
-        last_obj = self.hit_objects[-1]
+        last_obj = self.effective_hit_objects[-1]
         beat_duration = self.beat_duration(last_obj.time)
         return int(last_obj.time + last_obj.duration(beat_duration, self['SliderMultiplier']))
 
@@ -227,12 +384,11 @@ class Beatmap:
             return bpm * -beat_duration / 100
         return beat_duration
 
-    # Pega os objetos visíveis na tela em dado momento
     def visible_objects(self, time, count=None):
         objects = []
         preempt, _ = self.approach_rate()
 
-        i = bsearch(self.hit_objects, time, lambda obj: obj.time + preempt - obj.duration(self.beat_duration(obj.time),
+        i = bsearch(self.effective_hit_objects, time, lambda obj: obj.time + preempt - obj.duration(self.beat_duration(obj.time),
                                                                                           self['SliderMultiplier']))
         i -= 5
         if i < 0:
@@ -240,7 +396,7 @@ class Beatmap:
 
         n = 0
 
-        for obj in self.hit_objects[i:]:
+        for obj in self.effective_hit_objects[i:]:
             obj_duration = obj.duration(self.beat_duration(obj.time), self['SliderMultiplier'])
 
             if time > obj.time + obj_duration:
@@ -256,174 +412,7 @@ class Beatmap:
 
         return objects
 
-
-# Try to import Rust acceleration once at module level
-try:
-    import osu_fast
-    _RUST_AVAILABLE = True
-except ImportError:
-    _RUST_AVAILABLE = False
-
-def _convert_rust_beatmap(rust_data):
-    """Convert Rust beatmap data to Python Beatmap object"""
-    # Create a beatmap object directly from the structured data
-    class FastBeatmap(Beatmap):
-        def __init__(self, data):
-            # Skip parent constructor and initialize directly
-            self.format_version = "osu file format v14\n"
-            self.sections = {}
-            self.dt = False
-            self.hr = False
-            self.ez = False
-            self.ht = False
-            
-            # Set up difficulty section
-            difficulty = {}
-            difficulty['ApproachRate'] = data.get('ApproachRate', 5.0)
-            difficulty['CircleSize'] = data.get('CircleSize', 4.0) 
-            difficulty['HPDrainRate'] = data.get('HPDrainRate', 5.0)
-            difficulty['OverallDifficulty'] = data.get('OverallDifficulty', 5.0)
-            difficulty['SliderMultiplier'] = data.get('SliderMultiplier', 1.4)
-            difficulty['SliderTickRate'] = data.get('SliderTickRate', 1.0)
-            difficulty['AudioLeadIn'] = data.get('AudioLeadIn', 0)
-            self.sections['difficulty'] = difficulty
-            
-            # Convert timing points
-            if 'timing_points' in data:
-                self.timing_points = list(map(timing_points.create, data['timing_points']))
-            else:
-                self.timing_points = []
-            
-            # Convert hit objects
-            if 'hit_objects' in data:
-                self.hit_objects = list(map(hitobjects.create, data['hit_objects']))
-            else:
-                self.hit_objects = []
-        
-        def combo_color(self, new_combo, combo_skip):
-            return (255, 0, 0)
-
-        def __getattr__(self, key):
-            if key in self.sections:
-                return self.sections[key]
-            else:
-                return []
-
-        def __getitem__(self, key):
-            for section in self.sections.values():
-                if key in section:
-                    return section[key]
-            return None
-
-        def apply_mods(self, mods: list[str]):
-            for mod in mods:
-                mod = mod.lower()
-                if mod != 'dt' and mod != 'hr' and mod != 'ez' and mod != 'ht':
-                    raise ValueError(f"Invalid mod: {mod}. Only 'dt', 'hr', 'ez', and 'ht' are accepted/used.")
-
-                if mod == 'dt':
-                    self.dt = True
-                elif mod == 'hr':
-                    self.hr = True
-                elif mod == 'ez':
-                    self.ez = True
-                elif mod == 'ht':
-                    self.ht = True
-
-        def approach_rate(self):
-            ar = self["ApproachRate"]
-            if ar <= 5:
-                preempt = 1200 + 600 * (5 - ar) / 5
-                fade_in = 800 + 400 * (5 - ar) / 5
-            else:
-                preempt = 1200 - 750 * (ar - 5) / 5
-                fade_in = 800 - 500 * (ar - 5) / 5
-            return preempt, fade_in
-
-        def circle_radius(self):
-            return 27.2 - 2.24 * self['CircleSize']
-
-        def start_offset(self):
-            preempt, _ = self.approach_rate()
-            return int(self.hit_objects[0].time - preempt)
-
-        def length(self):
-            if len(self.hit_objects) == 0:
-                return 0
-            last_obj = self.hit_objects[-1]
-            beat_duration = self.beat_duration(last_obj.time)
-            return int(last_obj.time + last_obj.duration(beat_duration, self['SliderMultiplier']))
-
-        def _timing(self, time):
-            bpm = None
-            i = bsearch(self.timing_point, time, lambda tp: tp.time)
-            timing_point = self.timing_points[i - 1]
-
-            for tp in self.timing_points[i:]:
-                if tp.offset > time:
-                    break
-                if tp.bpm > 0:
-                    bpm = tp.bpm
-                timing_point = tp
-
-            while i >= 0 and bpm is None:
-                i -= 1
-                if self.timing_points[i].bpm > 0:
-                    bpm = self.timing_points[i].bpm
-
-            return bpm or 120, timing_point
-
-        def beat_duration(self, time):
-            bpm, timing_point = self._timing(time)
-            beat_duration = timing_point.bpm
-            if beat_duration < 0:
-                return bpm * -beat_duration / 100
-            return beat_duration
-
-        def visible_objects(self, time, count=None):
-            objects = []
-            preempt, _ = self.approach_rate()
-
-            i = bsearch(self.hit_objects, time, lambda obj: obj.time + preempt - obj.duration(self.beat_duration(obj.time),
-                                                                                              self['SliderMultiplier']))
-            i -= 5
-            if i < 0:
-                i = 0
-
-            n = 0
-
-            for obj in self.hit_objects[i:]:
-                obj_duration = obj.duration(self.beat_duration(obj.time), self['SliderMultiplier'])
-
-                if time > obj.time + obj_duration:
-                    continue
-                elif time < obj.time - preempt:
-                    break
-                elif time < obj.time + obj_duration:
-                    objects.append(obj)
-
-                n += 1
-                if not count is None and n >= count:
-                    return objects
-
-            return objects
-    
-    return FastBeatmap(rust_data)
-
 def load(filename):
-    # TODO the downloader.py file does not work with the rust implementation (missing beatmap id?)
-    # if _RUST_AVAILABLE:
-    #     try:
-    #         rust_beatmap = osu_fast.parse_beatmap_fast(filename)
-    #         # Convert Rust result to Python Beatmap object
-    #         beatmap = _convert_rust_beatmap(rust_beatmap)
-    #         beatmap._file_path = filename
-    #         return beatmap
-    #     except Exception:
-    #         # Fall back to Python implementation on any error
-    #         pass
-
     with open(filename, 'r', encoding='utf8') as file:
         beatmap = Beatmap(file)
-        beatmap._file_path = filename  # Store file path for Rust acceleration
         return beatmap
