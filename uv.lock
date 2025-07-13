@@ -1106,7 +1106,9 @@ dependencies = [
     { name = "polars" },
     { name = "pyautogui" },
     { name = "pygame" },
+    { name = "pymem" },
     { name = "python-dotenv" },
+    { name = "pywin32" },
     { name = "scikit-learn" },
     { name = "tqdm" },
 ]
@@ -1126,7 +1128,9 @@ requires-dist = [
     { name = "polars", specifier = ">=1.31.0" },
     { name = "pyautogui", specifier = ">=0.9.54" },
     { name = "pygame", specifier = ">=2.6.1" },
+    { name = "pymem", specifier = ">=1.14.0" },
     { name = "python-dotenv", specifier = ">=1.1.1" },
+    { name = "pywin32", specifier = ">=310" },
     { name = "scikit-learn", specifier = ">=1.7.0" },
     { name = "tqdm", specifier = ">=4.67.1" },
 ]
@@ -1394,6 +1398,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/b0/77/a5b8c569bf593b0140bde72ea885a803b82086995367bf2037de0159d924/pygments-2.19.2.tar.gz", hash = "sha256:636cb2477cec7f8952536970bc533bc43743542f70392ae026374600add5b887", size = 4968631, upload_time = "2025-06-21T13:39:12.283Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c7/21/705964c7812476f378728bdf590ca4b771ec72385c533964653c68e86bdc/pygments-2.19.2-py3-none-any.whl", hash = "sha256:86540386c03d588bb81d44bc3928634ff26449851e99741617ecb9037ee5ec0b", size = 1225217, upload_time = "2025-06-21T13:39:07.939Z" },
+]
+
+[[package]]
+name = "pymem"
+version = "1.14.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/1f/fd/1906f383fd9697c0da599580c58f5cd5af48edb55429f6ef994c447fb94e/pymem-1.14.0.tar.gz", hash = "sha256:29f6c32bcad0032888afabadf97d1e4c7757f88873de4d79f7f4c1df9b9e7ef1", size = 24890, upload_time = "2024-10-27T18:59:50.369Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0d/a5/23907a4b55d67cd4c0e4b9a37e32f5f1ffaf7e286dcf172a2a1bb9e12444/pymem-1.14.0-py3-none-any.whl", hash = "sha256:2b9cc64b49d0685f73d616ab1f638611f87e8d649869e7a556f050f677c42a7e", size = 29833, upload_time = "2024-10-27T18:59:48.911Z" },
 ]
 
 [[package]]

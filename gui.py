@@ -386,10 +386,12 @@ def main():
     """Main entry point"""
     gui = OsuAIGUI()
     gui.create_gui()
-    gui.log_message("osu! AI Assistant started")
-    gui.log_message("Click 'Refresh Beatmap Info' to detect current map")
     gui.run()
 
 
 if __name__ == "__main__":
     main()
+
+    import osu.client.controller as controller
+    osu = controller.OSUController()
+    print(osu.read_value("MapFolderName"))

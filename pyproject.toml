@@ -18,7 +18,9 @@ dependencies = [
     "polars>=1.31.0",
     "pyautogui>=0.9.54",
     "pygame>=2.6.1",
+    "pymem>=1.14.0",
     "python-dotenv>=1.1.1",
+    "pywin32>=310",
     "scikit-learn>=1.7.0",
     "tqdm>=4.67.1",
 ]
