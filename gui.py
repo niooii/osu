@@ -390,8 +390,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # main()
 
     import osu.client.controller as controller
     osu = controller.OSUController()
-    print(osu.read_value("MapFolderName"))
+    while True:
+        print(osu.game.status())
