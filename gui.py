@@ -524,6 +524,9 @@ class OsuAIGUI:
 
 def main():
     gui = OsuAIGUI()
+    while True:
+        if gui.osu.game.status() == 2:
+            print(gui.osu.play.playing_mods())
     gui.create_gui()
     gui.run()
 

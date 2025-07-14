@@ -307,7 +307,7 @@ class OSUMemorySignatures:
             name="PlayingMods",
             parent_name="PlayContainer",
             pointer_offsets=[56, 28],
-            data_type=DataType.INT  # Note: This requires special XOR processing
+            data_type=DataType.INT
         ),
 
         "PlayerName": MemorySignature(

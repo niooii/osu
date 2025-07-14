@@ -112,8 +112,13 @@ class PlayNamespace:
         return self._controller.read_value("PlayerHpSmoothed")
     
     def playing_mods(self) -> int:
-        return self._controller.read_value("PlayingMods")
-    
+        addr = self._controller.read_value("PlayingMods")
+
+        data1 = self._controller._pm.read_int(addr + 8)
+        data2 = self._controller._pm.read_int(addr + 12)
+        result = data1 ^ data2
+        return result
+
     def player_name(self) -> str:
         return self._controller.read_value("PlayerName")
     
@@ -152,14 +157,16 @@ class TourneyNamespace:
         return self._controller.read_value("TourneyScoreVisible")
 
 
-def _pattern_converter(patt: str) -> bytes:
+def _pattern_converter(patt: str, mask: str = None) -> bytes:
     # Split the pattern into individual hex pairs (or wildcards)
     hex_parts = patt.split(' ')
     result = b''
 
-    for part in hex_parts:
-        if part == '??':
-            result += b'.'
+    for i, part in enumerate(hex_parts):
+        if mask and i < len(mask) and mask[i] == '?':
+            result += b'.'  # Wildcard for pymem
+        elif part == '??':
+            result += b'.'  # Explicit wildcard in pattern
         else:
             try:
                 byte_value = int(part, 16)
@@ -192,15 +199,29 @@ class OSUController:
         """Find all base pattern addresses and cache them"""
         for name, sig in self._signatures.items():
             if sig.pattern:  # This is a base signature with its own pattern
-                pattern_bytes = _pattern_converter(sig.pattern)
-                address = pattern.pattern_scan_all(self._pm.process_handle, pattern_bytes)
-                self.base_addresses[name] = address
+                print(f"Finding pattern for {name}: {sig.pattern}")
+                if sig.mask:
+                    print(f"  with mask: {sig.mask}")
+                pattern_bytes = _pattern_converter(sig.pattern, sig.mask)
+                print(f"  converted to: {pattern_bytes}")
+                try:
+                    address = pattern.pattern_scan_all(self._pm.process_handle, pattern_bytes)
+                    if address is not None and address != 0:
+                        print(f"  {name} found at: {address} (0x{address:X})")
+                        self.base_addresses[name] = address
+                    else:
+                        print(f"  {name} NOT FOUND SIGH (pattern_scan_all returned {address})")
+                        self.base_addresses[name] = 0
+                except Exception as e:
+                    print(f"  {name} FAILED: {e}")
+                    self.base_addresses[name] = 0
 
     def _get_sig_addr(self, signature_name: str) -> int:
         """
         Translation of ResolveChainOfPointers() from Sig.cs
         https://github.com/Piotrekol/ProcessMemoryDataFinder/blob/master/ProcessMemoryDataFinder/API/Sig.cs
         """
+
         sig = self._signatures[signature_name]
         
         # line 88-89: if (_resolvedAddress != IntPtr.Zero) return _resolvedAddress;
@@ -211,16 +232,16 @@ class OSUController:
         if sig.parent_name is not None:
             addr = self._get_sig_addr(sig.parent_name)
             addr += sig.base_offset
-        
+
         if sig.pattern is not None:
             if sig.name in self.base_addresses:
-                addr = self.base_addresses[sig.name]
+                addr = self.base_addresses[sig.name] + sig.base_offset
             else:
                 return 0
         
         if addr != 0:
             addr = self._resolve_chain_of_pointers(addr, sig.pointer_offsets)
-        
+
         return addr
     
     def _resolve_chain_of_pointers(self, base_address: int, pointer_offsets: list) -> int:
