@@ -12,15 +12,11 @@ import pandas as pd
 import time
 import shutil
 import hashlib
+from osu.rulesets.core import OSU_PATH
 
 load_dotenv()
 
 osu_session = os.getenv("OSU_SESSION")
-
-APP_DATA = os.getenv("APPDATA")
-OSU_PATH = f'{APP_DATA}/../Local/osu!'
-
-print(f'osu! path: {OSU_PATH}')
 
 os.makedirs('../.data/replays', exist_ok=True)
 
@@ -43,7 +39,8 @@ def get_replay(score_id: int, map_md5: str, verbose: bool = False) -> (replay.Re
     if response.status_code // 100 != 2:
         if response.status_code == 404:
             return None
-        verbose and print(f'osu responded with status code {response.status_code} for replay {score_id}, waiting a few secs')
+        verbose and print(
+            f'osu responded with status code {response.status_code} for replay {score_id}, waiting a few secs')
         while retry_times < 5 and response.status_code // 100 != 2:
             time.sleep(4 * (retry_times + 1))
             response = requests.get(url, headers=headers)
@@ -51,10 +48,12 @@ def get_replay(score_id: int, map_md5: str, verbose: bool = False) -> (replay.Re
                 return None
             if response.status_code // 100 == 2:
                 break
-            verbose and print(f'osu responded with status code {response.status_code} for replay {score_id}, waiting a few secs')
+            verbose and print(
+                f'osu responded with status code {response.status_code} for replay {score_id}, waiting a few secs')
             retry_times += 1
         if retry_times == 5:
-            print(f'Error: Retried 5 or so times without a 200 status code for replay {score_id}, stopping. check osu session.')
+            print(
+                f'Error: Retried 5 or so times without a 200 status code for replay {score_id}, stopping. check osu session.')
             return None
 
     rp = replay.Replay(io.BytesIO(response.content))
@@ -69,7 +68,8 @@ def get_replay(score_id: int, map_md5: str, verbose: bool = False) -> (replay.Re
     return (rp, score_id)
 
 
-def download_t50_replays(beatmap: beatmap.Beatmap, cache_map_path: str, map_md5: str, max: int = 50, only: Literal['FC', 'S', 'ALL'] = 'S', verbose: bool = False) -> \
+def download_t50_replays(beatmap: beatmap.Beatmap, cache_map_path: str, map_md5: str, max: int = 50,
+                         only: Literal['FC', 'S', 'ALL'] = 'S', verbose: bool = False) -> \
         list[replay.Replay]:
     retry_times = 0
     beatmap_id = beatmap.beatmap_id()
@@ -134,8 +134,9 @@ def download_t50_replays(beatmap: beatmap.Beatmap, cache_map_path: str, map_md5:
     return replays
 
 
-def download_local_mapset_t50_replays(mapset_folder: str, verbose: bool = False, filter: None | Callable[[beatmap.Beatmap], bool] = None,
-    **kwargs) -> pd.DataFrame:
+def download_local_mapset_t50_replays(mapset_folder: str, verbose: bool = False,
+                                      filter: None | Callable[[beatmap.Beatmap], bool] = None,
+                                      **kwargs) -> pd.DataFrame:
     mapset_folder_name = mapset_folder
     mapset_folder = f'{OSU_PATH}/Songs/{mapset_folder}'
     files = os.listdir(mapset_folder)
@@ -162,7 +163,8 @@ def download_local_mapset_t50_replays(mapset_folder: str, verbose: bool = False,
         with open(map_path, 'rb') as f:
             hash = hashlib.md5(f.read()).hexdigest()
 
-        downloaded_replays = download_t50_replays(mp, cache_map_path=cache_map_path, map_md5=hash, verbose=verbose, **kwargs)
+        downloaded_replays = download_t50_replays(mp, cache_map_path=cache_map_path, map_md5=hash, verbose=verbose,
+                                                  **kwargs)
         if downloaded_replays is None:
             continue
 

@@ -1,16 +1,29 @@
+import os.path
+
 import dearpygui.dearpygui as dpg
 import threading
 import time
 from dataclasses import dataclass
 from typing import Optional
+import osu.rulesets.core as osu_core
+import torch
+from torch import FloatTensor
+import osu.dataset as dataset
+import osu.rulesets.beatmap as bm
+import osu.client.controller as controller
+from osu.gan import OsuReplayGAN
+from osu.rnn import OsuReplayRNN
+from osu.rulesets.core import OSU_PATH
+from PIL import Image, ImageFilter, ImageEnhance
+import numpy as np
+from tkinter import filedialog as fd
 
 
 @dataclass
-class BeatmapInfo:
-    artist: str
-    title: str
-    difficulty: str
-    beatmap_id: int
+class CurrentBeatmapInfo:
+    osu_file: str
+    md5: str
+    beatmap: bm.Beatmap
 
 
 def do_theming_stuff():
@@ -18,7 +31,6 @@ def do_theming_stuff():
     with dpg.font_registry():
         default_font = dpg.add_font("resources/Comfortaa-Bold.ttf", 20)
 
-    # Configure theme for better appearance
     with dpg.theme() as global_theme:
         with dpg.theme_component(dpg.mvAll):
             dpg.add_theme_color(dpg.mvThemeCol_WindowBg, (38, 35, 53))  # 262335
@@ -48,95 +60,136 @@ def do_theming_stuff():
             dpg.add_theme_style(dpg.mvStyleVar_GrabMinSize, 15)  # circle size
             dpg.add_theme_style(dpg.mvStyleVar_GrabRounding, 15)  # make it circular
 
+    # Create red theme for text
+    with dpg.theme(tag="red_theme"):
+        with dpg.theme_component(dpg.mvText):
+            dpg.add_theme_color(dpg.mvThemeCol_Text, (255, 0, 0))
+        with dpg.theme_component(dpg.mvButton):
+            dpg.add_theme_color(dpg.mvThemeCol_Text, (255, 0, 0))
+
+    with dpg.theme(tag="green_theme"):
+        with dpg.theme_component(dpg.mvText):
+            dpg.add_theme_color(dpg.mvThemeCol_Text, (0, 255, 0))
+        with dpg.theme_component(dpg.mvButton):
+            dpg.add_theme_color(dpg.mvThemeCol_Text, (0, 255, 0))
+
     dpg.bind_theme(global_theme)
 
     return default_font
 
+
 class OsuAIGUI:
     def __init__(self):
-        self.current_beatmap: Optional[BeatmapInfo] = None
-        self.is_generating = False
-        self.is_playing = False
-        self.replay_data = None
+        self.map: Optional[CurrentBeatmapInfo] = None
+        self.map_cache: dict[str, bm.Beatmap] = dict()
+        self.map_frames_cache: dict[str, FloatTensor] = dict()
+        self.play_frames_cache: dict[str, np.ndarray] = dict()
+        self.osu = controller.OSUController()
         self.map_background_texture = None
+        self.rnn_weights_path: Optional[str] = None
+        self.gan_weights_path: Optional[str] = None
+        self.rnn: Optional[OsuReplayRNN] = None
+        self.gan: Optional[OsuReplayGAN] = None
+        self.use_gan = True
+        self.active = True
 
     def create_gui(self):
         dpg.create_context()
 
         default_font = do_theming_stuff()
 
+        try:
+            with dpg.font_registry():
+                title_font = dpg.add_font("resources/Comfortaa-Bold.ttf", 26)
+                artist_font = dpg.add_font("resources/Comfortaa-Bold.ttf", 10)
+        except Exception as e:
+            print(e)
+
         # TODO
         screen_height = 1080
         size = screen_height // 2
 
         # Main window
-        with dpg.window(label="osu! AI Assistant",
+        with dpg.window(label="osu! AI",
                         tag="main_window",
-                        width=size-20, height=size-40,
+                        width=size - 20, height=size - 40,
                         no_close=False):
-            # Current beatmap section - map preview with background
+
+            # Current beatmap section
             with dpg.group():
                 dpg.add_text("Current Beatmap")
                 dpg.add_separator()
-                
+
                 # Map preview container with background image
-                with dpg.drawlist(width=size-40, height=120, tag="map_preview"):
-                    # Background rectangle (placeholder for map background)
-                    dpg.draw_rectangle((0, 0), (size-40, 120), 
-                                     fill=(50, 50, 50), color=(100, 100, 100))
-                    
-                    # Semi-transparent overlay for text readability
-                    dpg.draw_rectangle((0, 80), (size-40, 120), 
-                                     fill=(0, 0, 0, 180), color=(0, 0, 0, 0))
-                
-                # Text overlay on the preview (positioned over the drawlist)
+                with dpg.drawlist(width=size - 40, height=120, tag="map_preview"):
+                    # (placeholder for map background)
+                    dpg.draw_rectangle((0, 0), (size - 40, 120),
+                                       fill=(50, 50, 50), color=(100, 100, 100))
+
                 with dpg.group():
-                    dpg.add_text("Artist: Not detected", tag="artist_text", 
-                               pos=[10, 90], color=(255, 255, 255))
-                    dpg.add_text("Title: Not detected", tag="title_text", 
-                               pos=[10, 105], color=(255, 255, 255))
-                    dpg.add_text("Difficulty: Not detected", tag="diff_text", 
-                               pos=[10, 120], color=(255, 255, 255))
-                
-                dpg.add_button(label="Refresh Beatmap Info", callback=self.refresh_beatmap)
+                    # Title text (larger font, bold)
+                    ttext = dpg.add_text("", tag="title_text",
+                                         pos=[10, 70], color=(255, 255, 255))
+                    # Artist text (smaller font, bold)
+                    atext = dpg.add_text("", tag="artist_text",
+                                         pos=[10, 90], color=(255, 255, 255))
+                    # Difficulty text (inside map preview, upper right)
+                    dtext = dpg.add_text("", tag="diff_text",
+                                         pos=[10, 110], color=(255, 255, 255))
 
             dpg.add_separator()
 
-            # AI Status section
+            # Load neural networks
             with dpg.group():
-                dpg.add_text("AI Status")
+                dpg.add_text("Models")
                 dpg.add_separator()
+                dpg.add_button(label="Load RNN",
+                               callback=self.load_rnn_weights,
+                               width=140, height=30)
                 with dpg.group(horizontal=True):
-                    dpg.add_text("Status:")
-                    dpg.add_text("Ready", tag="status_text", color=(0, 255, 0))
+                    dpg.add_text(f"Loaded weights: ")
+                    dpg.add_text(f"None", tag="rnn_weights")
+
+                dpg.add_button(label="Load GAN",
+                               callback=self.load_gan_weights,
+                               width=140, height=30)
 
                 with dpg.group(horizontal=True):
-                    dpg.add_text("Replay Data:")
-                    dpg.add_text("None", tag="replay_status", color=(255, 100, 100))
+                    dpg.add_text(f"Loaded weights: ")
+                    dpg.add_text(f"None", tag="gan_weights")
 
-            dpg.add_separator()
+                def toggle_gan():
+                    curr = dpg.get_value("use_gan")
+                    self.use_gan = curr
+
+                dpg.add_checkbox(label="Use GAN", default_value=self.use_gan,
+                                 callback=toggle_gan, tag="use_gan")
 
             # Control buttons
             with dpg.group():
-                dpg.add_text("Controls")
                 dpg.add_separator()
 
                 with dpg.group(horizontal=True):
-                    dpg.add_button(label="Generate Replay",
-                                   callback=self.generate_replay,
-                                   width=140, height=30)
-                    dpg.add_button(label="Start AI Play",
-                                   callback=self.start_ai_play,
+                    dpg.add_button(label="Generate Play",
+                                   callback=self.generate_play,
                                    width=140, height=30,
-                                   tag="play_button")
+                                   tag="generate_play")
+                    dpg.add_button(label="Reset",
+                                   callback=None,
+                                   width=140, height=30)
+
+                def set_active():
+                    self.active = dpg.get_value("active")
 
                 with dpg.group(horizontal=True):
-                    dpg.add_button(label="Stop AI",
-                                   callback=self.stop_ai,
-                                   width=140, height=30)
-                    dpg.add_button(label="Reset",
-                                   callback=self.reset_ai,
-                                   width=140, height=30)
+                    dpg.add_checkbox(
+                        label="Active",
+                        default_value=self.active,
+                        callback=set_active,
+                        tag="active"
+                    )
+
+                dpg.bind_item_theme("generate_play", "red_theme")
 
             dpg.add_separator()
 
@@ -165,6 +218,7 @@ class OsuAIGUI:
                 dpg.add_input_text(tag="debug_log",
                                    multiline=True,
                                    readonly=True,
+                                   width=size-40,
                                    height=100,
                                    default_value="Ready to start...\n")
 
@@ -176,9 +230,46 @@ class OsuAIGUI:
 
         dpg.setup_dearpygui()
         dpg.bind_font(default_font)
+
+        # font loading hates working lol
+        # dpg.bind_item_font("title_text", title_font)
+        # dpg.bind_item_font("artist_text", artist_font)
+        # dpg.bind_item_font(dtext, artist_font)
+
         dpg.show_viewport()
 
         dpg.set_primary_window("main_window", True)
+
+        self.refresh_beatmap()
+
+        # Start the refresh thread
+        self.start_refresh_thread()
+        # Start the playing thread
+        self.start_play_thread()
+
+    def load_rnn_weights(self):
+        path = fd.askopenfilename(initialdir=".")
+        if path is not None and os.path.exists(path):
+            try:
+                self.rnn = OsuReplayRNN.load(path)
+                self.rnn_weights_path = path
+                dpg.set_value("rnn_weights", os.path.basename(path))
+                dpg.bind_item_theme("rnn_weights", "green_theme")
+            except Exception as e:
+                dpg.set_value("rnn_weights", f"Invalid")
+                dpg.bind_item_theme("rnn_weights", "red_theme")
+                print(e)
+
+    def load_gan_weights(self):
+        path = fd.askopenfilename(initialdir=".")
+        if path is not None and os.path.exists(path):
+            try:
+                self.gan = OsuReplayGAN.load_generator_only(path)
+                self.gan_weights_path = path
+                dpg.set_value("gan_weights", os.path.basename(path))
+            except Exception as e:
+                dpg.set_value("gan_weights", f"Invalid")
+                print(e)
 
     def log_message(self, message: str):
         """Add message to debug log"""
@@ -186,6 +277,7 @@ class OsuAIGUI:
         timestamp = time.strftime("%H:%M:%S")
         new_log = f"{current_log}[{timestamp}] {message}\n"
         dpg.set_value("debug_log", new_log)
+        print(f'[{timestamp}] {message}')
 
         # Auto-scroll to bottom (approximate)
         if len(new_log.split('\n')) > 10:
@@ -194,205 +286,247 @@ class OsuAIGUI:
 
     def refresh_beatmap(self):
         """Refresh current beatmap info from osu! memory"""
-        self.log_message("Refreshing beatmap info...")
-
-        # TODO: Replace with actual memory reading
-        # For now, simulate beatmap detection
         try:
-            # This is where you'd call your OsuMemoryReader
-            # beatmap = memory_reader.get_current_beatmap()
+            osu = self.osu
+            status = osu.game.status()
+            # 5 == song select, 2 == playing map
+            if status == 5 or status == 2:
+                map_md5 = osu.beatmap.md5()
+                if self.map and self.map.md5 == map_md5:
+                    return
+                map_path = osu.beatmap.osu_file_path()
+                if map_md5 not in self.map_cache:
+                    self.map_cache[map_md5] = bm.load(map_path)
 
-            # Simulated data for testing
-            self.current_beatmap = BeatmapInfo(
-                artist="Example Artist",
-                title="Example Song",
-                difficulty="Hard",
-                beatmap_id=12345
-            )
-
-            if self.current_beatmap:
-                dpg.set_value("artist_text", f"Artist: {self.current_beatmap.artist}")
-                dpg.set_value("title_text", f"Title: {self.current_beatmap.title}")
-                dpg.set_value("diff_text", f"Difficulty: {self.current_beatmap.difficulty}")
-                self.log_message(f"Detected: {self.current_beatmap.artist} - {self.current_beatmap.title}")
-
-                # Auto-generate if enabled
-                if dpg.get_value("auto_generate"):
-                    self.generate_replay()
+                self.map = CurrentBeatmapInfo(
+                    osu_file=map_path,
+                    beatmap=self.map_cache[map_md5],
+                    md5=map_md5
+                )
+                self.update_beatmap_display()
+                dpg.bind_item_theme(
+                    "generate_play",
+                    "red_theme" if self.play_frames_cache.get(map_md5) is None else "green_theme"
+                )
             else:
-                self.log_message("No beatmap detected")
+                if self.map is not None:
+                    self.map = None
+                    self.update_beatmap_display()
 
         except Exception as e:
-            self.log_message(f"Error reading beatmap: {str(e)}")
+            pass
 
-    def generate_replay(self):
-        """Generate AI replay for current beatmap"""
-        if self.is_generating:
-            self.log_message("Already generating replay...")
+    def generate_play(self):
+        if self.map is None:
+            self.log_message(f'no map was selected')
             return
 
-        if not self.current_beatmap:
-            self.log_message("No beatmap selected. Please refresh beatmap info first.")
+        if self.use_gan and self.gan is None:
+            self.log_message(f'using the GAN to generate the play, but no weights were loaded')
             return
 
-        self.is_generating = True
-        dpg.set_value("status_text", "Generating...")
-        dpg.configure_item("status_text", color=(255, 255, 0))
-        self.log_message(f"Generating replay for {self.current_beatmap.title}...")
+        if not self.use_gan and self.rnn is None:
+            self.log_message(f'using the RNN to generate the play, but no weights were loaded')
+            return
 
         # Run generation in separate thread to avoid blocking UI
         def generate_thread():
-            try:
-                # TODO: Replace with actual GAN inference
-                # self.replay_data = replay_generator.generate_replay(self.current_beatmap)
+            start_md5 = self.map.md5
+            if start_md5 not in self.map_frames_cache:
+                data = dataset.input_data(self.map.beatmap)
+                data = np.reshape(data.values, (-1, dataset.BATCH_LENGTH, len(dataset.INPUT_FEATURES)))
+                data = torch.FloatTensor(data)
+                self.map_frames_cache[start_md5] = data
 
-                # Simulate generation time
-                time.sleep(2)
+            if self.use_gan:
+                play_data = self.gan.generate(self.map_frames_cache[self.map.md5])
+            else:
+                play_data = self.rnn.generate(self.map_frames_cache[self.map.md5])
 
-                # Simulated replay data
-                self.replay_data = [(i * 100, 200 + i, 300 + i, False) for i in range(100)]
-
-                # Update UI on main thread
-                dpg.set_value("status_text", "Ready")
-                dpg.configure_item("status_text", color=(0, 255, 0))
-                dpg.set_value("replay_status", "Generated")
-                dpg.configure_item("replay_status", color=(0, 255, 0))
-                self.log_message("Replay generation complete!")
-
-            except Exception as e:
-                dpg.set_value("status_text", "Error")
-                dpg.configure_item("status_text", color=(255, 0, 0))
-                self.log_message(f"Generation error: {str(e)}")
-
-            finally:
-                self.is_generating = False
+            play_data = np.concatenate(play_data)
+            self.play_frames_cache[start_md5] = play_data
+            self.log_message(f'play generated')
+            dpg.bind_item_theme("generate_play", "green_theme")
 
         threading.Thread(target=generate_thread, daemon=True).start()
 
-    def start_ai_play(self):
-        """Start AI playback"""
-        if not self.replay_data:
-            self.log_message("No replay data available. Generate a replay first.")
-            return
+    def start_refresh_thread(self):
+        """Start the background refresh thread"""
+        self.refresh_running = True
 
-        if self.is_playing:
-            self.log_message("AI is already playing...")
-            return
+        def refresh_loop():
+            while self.refresh_running:
+                self.refresh_beatmap()
+                time.sleep(0.1)
 
-        self.is_playing = True
-        dpg.set_value("status_text", "Playing")
-        dpg.configure_item("status_text", color=(0, 255, 255))
-        dpg.configure_item("play_button", label="Playing...")
+        self.refresh_thread = threading.Thread(target=refresh_loop, daemon=True)
+        self.refresh_thread.start()
 
-        speed = dpg.get_value("playback_speed")
-        self.log_message(f"Starting AI playback at {speed}x speed...")
+    def stop_refresh_thread(self):
+        """Stop the background refresh thread"""
+        self.refresh_running = False
+        if self.refresh_thread:
+            self.refresh_thread.join(timeout=0.2)
 
-        # TODO: Replace with actual mouse controller
-        def play_thread():
-            try:
-                # This is where you'd call your PreciseMouseController
-                # mouse_controller.start_replay_execution(self.replay_data, memory_reader)
+    def start_play_thread(self):
+        import mouse
+        def play_loop():
+            # only apply movement for a frame ONCE.
+            prev_frame = 0
 
-                # Simulate playback
-                for i, (timestamp, x, y, keys) in enumerate(self.replay_data):
-                    if not self.is_playing:
-                        break
-                    time.sleep(0.01 / speed)  # Simulated timing
+            osu = self.osu
+            while True:
+                # lets not hog the cpu guys
+                time.sleep(0.008)
+                # check if we're in play mode
+                status = osu.game.status()
+                curr_md5 = osu.beatmap.md5()
+                if status != 2 or not self.active or not curr_md5 == self.map.md5\
+                        or self.play_frames_cache.get(curr_md5) is None:
+                    # it takes more than 0.5 secs to do anything lol
+                    time.sleep(0.5)
+                    continue
+                frames = self.play_frames_cache[curr_md5]
+                curr_time = osu.game.play_time()
 
-                    if dpg.get_value("show_debug") and i % 10 == 0:
-                        self.log_message(f"Position: ({x}, {y}) at {timestamp}ms")
+                REPLAY_SAMPLING_RATE = 24
+                frame = int((curr_time - self.map.beatmap.start_offset()) // REPLAY_SAMPLING_RATE)
+                if 0 < frame < len(frames) and prev_frame != frame:
+                    prev_frame = frame
+                    x, y = frames[frame]
+                    x = (x + 0.5) * osu_core.SCREEN_WIDTH
+                    y = (y + 0.5) * osu_core.SCREEN_HEIGHT
+                    (x, y) = osu_core.osu_to_screen_pixel(x, y)
+                    mouse.move(x, y)
 
-                self.log_message("Playback completed!")
+        threading.Thread(target=play_loop, daemon=True).start()
 
-            except Exception as e:
-                self.log_message(f"Playback error: {str(e)}")
-            finally:
-                self.is_playing = False
-                dpg.set_value("status_text", "Ready")
-                dpg.configure_item("status_text", color=(0, 255, 0))
-                dpg.configure_item("play_button", label="Start AI Play")
+    def update_beatmap_display(self):
+        """Update the beatmap display with current map info"""
+        if self.map and self.map.beatmap:
+            beatmap = self.map.beatmap
+            dpg.set_value("artist_text", f"{beatmap.artist()}")
+            dpg.set_value("title_text", f"{beatmap.title()}")
 
-        threading.Thread(target=play_thread, daemon=True).start()
+            diff_text = beatmap.version()
+            dpg.set_value("diff_text", diff_text)
 
-    def stop_ai(self):
-        """Stop AI playback"""
-        if self.is_playing:
-            self.is_playing = False
-            self.log_message("AI playback stopped")
-            dpg.set_value("status_text", "Stopped")
-            dpg.configure_item("status_text", color=(255, 0, 0))
-            dpg.configure_item("play_button", label="Start AI Play")
+            bg_name = beatmap.background_name()
+            self.update_map_background(bg_name)
         else:
-            self.log_message("AI is not currently playing")
+            dpg.set_value("artist_text", "")
+            dpg.set_value("title_text", "")
+            dpg.set_value("diff_text", "")
 
-    def reset_ai(self):
-        """Reset AI state"""
-        self.stop_ai()
-        self.replay_data = None
-        self.current_beatmap = None
+    def process_background_image(self, image_path: str):
+        try:
+            preview_size = (dpg.get_viewport_width(), 120)
 
-        # Reset UI
-        dpg.set_value("artist_text", "Artist: Not detected")
-        dpg.set_value("title_text", "Title: Not detected")
-        dpg.set_value("diff_text", "Difficulty: Not detected")
-        dpg.set_value("replay_status", "None")
-        dpg.configure_item("replay_status", color=(255, 100, 100))
-        dpg.set_value("status_text", "Ready")
-        dpg.configure_item("status_text", color=(0, 255, 0))
-        dpg.set_value("debug_log", "Reset complete...\n")
+            img = Image.open(image_path)
 
-        self.log_message("AI state reset")
+            aspect = img.width / float(img.height)
+
+            new_width = preview_size[0]
+            new_height = int(preview_size[0] / aspect)
+            img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
+            if img.mode != 'RGBA':
+                img = img.convert('RGBA')
+
+            enhancer = ImageEnhance.Brightness(img)
+            img = enhancer.enhance(0.6)
+
+            img_array = np.array(img, dtype=np.float32) / 255.0
+            processed_data = img_array.flatten().tolist()
+
+            return img.width, img.height, processed_data
+
+        except Exception as e:
+            print(f'unluncky {e}')
 
     def update_map_background(self, image_path: str):
         """Update the map background image"""
+        if not image_path:
+            dpg.delete_item("map_preview", children_only=True)
+            # Show dark purple background when no image
+            dpg.draw_rectangle((0, 0), (480, 120),
+                               fill=(50, 50, 50), color=(100, 100, 100), parent="map_preview")
+            return
+
         try:
-            # Load texture from image file
-            width, height, channels, data = dpg.load_image(image_path)
-            
-            # Create texture if it doesn't exist
+            mapset_folder = os.path.dirname(self.map.osu_file)
+            bg_file = os.path.join(mapset_folder, image_path)
+
+            # Check if file exists
+            if not os.path.exists(bg_file):
+                dpg.delete_item("map_preview", children_only=True)
+                # Show dark purple background when file not found
+                dpg.draw_rectangle((0, 0), (480, 120),
+                                   fill=(50, 50, 50), color=(100, 100, 100), parent="map_preview")
+                return
+
+            width, height, processed_data = self.process_background_image(bg_file)
+
+            if not processed_data or width <= 0 or height <= 0:
+                dpg.delete_item("map_preview", children_only=True)
+                # dark purple
+                dpg.draw_rectangle((0, 0), (480, 120),
+                                   fill=(50, 50, 50), color=(100, 100, 100), parent="map_preview")
+                return
+
+            with dpg.texture_registry():
+                new_texture = dpg.add_static_texture(
+                    width=width, height=height, default_value=processed_data
+                )
+
+            # Calculate scaled size to fit preview area
+            preview_width = dpg.get_viewport_width()
+            preview_height = 120
+
+            aspect_ratio = width / height
+            if width > height:
+                scaled_width = preview_width
+                scaled_height = preview_width / aspect_ratio
+            else:
+                scaled_height = preview_height
+                scaled_width = preview_height * aspect_ratio
+
+            # Center the image
+            x_offset = (preview_width - scaled_width) / 2
+            y_offset = (preview_height - scaled_height) / 2
+
+            dpg.delete_item("map_preview", children_only=True)
+            dpg.draw_image(new_texture,
+                           (x_offset, y_offset),
+                           (x_offset + scaled_width, y_offset + scaled_height),
+                           parent="map_preview")
+
+            # Clean up old texture after new one is displayed
             if self.map_background_texture:
                 dpg.delete_item(self.map_background_texture)
-            
-            self.map_background_texture = dpg.add_static_texture(
-                width=width, height=height, default_value=data
-            )
-            
-            # Clear the drawlist and redraw with new background
-            dpg.delete_item("map_preview", children_only=True)
-            
-            # Draw the background image
-            dpg.draw_image(self.map_background_texture, (0, 0), (width, height), parent="map_preview")
-            
-            # Redraw the overlay
-            dpg.draw_rectangle((0, 80), (width, 120), 
-                             fill=(0, 0, 0, 180), color=(0, 0, 0, 0), parent="map_preview")
-            
-            self.log_message(f"Updated map background: {image_path}")
-            
+            self.map_background_texture = new_texture
+
         except Exception as e:
-            self.log_message(f"Failed to load background image: {str(e)}")
+            dpg.delete_item("map_preview", children_only=True)
+            # Show dark purple background on any error
+            dpg.draw_rectangle((0, 0), (480, 120),
+                               fill=(50, 50, 50), color=(100, 100, 100), parent="map_preview")
 
     def run(self):
-        """Start the GUI"""
         try:
             dpg.start_dearpygui()
         except KeyboardInterrupt:
             self.log_message("Shutting down...")
         finally:
+            self.stop_refresh_thread()
             dpg.destroy_context()
 
 
 def main():
-    """Main entry point"""
     gui = OsuAIGUI()
     gui.create_gui()
     gui.run()
 
 
 if __name__ == "__main__":
-    # main()
-
-    import osu.client.controller as controller
-    osu = controller.OSUController()
-    while True:
-        print(osu.game.status())
+    main()

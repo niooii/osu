@@ -63,7 +63,6 @@ class Replay:
         for w, x, y, z in data:
             offset += w
             self.data.append((offset, x, y, z))
-            print(offset)
 
         self.data = list(sorted(self.data))
 

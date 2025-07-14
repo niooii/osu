@@ -4,6 +4,7 @@ from pymem import pattern, Pymem
 import os
 
 from osu.client.mem import OSUMemorySignatures, MemorySignature, DataType
+from osu.rulesets.core import OSU_PATH
 
 
 class GameNamespace:
@@ -47,6 +48,9 @@ class BeatmapNamespace:
     
     def osu_file_name(self) -> str:
         return self._controller.read_value("MapOsuFileName")
+
+    def osu_file_path(self) -> str:
+        return f'{OSU_PATH}/Songs/{self.folder_name()}/{self.osu_file_name()}'
     
     def md5(self) -> str:
         return self._controller.read_value("MapMd5")
@@ -146,11 +150,6 @@ class TourneyNamespace:
     
     def score_visible(self) -> bool:
         return self._controller.read_value("TourneyScoreVisible")
-
-
-APP_DATA = os.getenv("APPDATA")
-OSU_PATH = f'{APP_DATA}/../Local/osu!'
-print(f'osu! path: {OSU_PATH}')
 
 
 def _pattern_converter(patt: str) -> bytes:

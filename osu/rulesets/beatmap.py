@@ -412,6 +412,22 @@ class Beatmap:
 
         return objects
 
+    def background_name(self):
+        """Returns the background image filename from the Events section, or None if not found"""
+        if 'events' not in self.sections:
+            return None
+        
+        for event in self.sections['events']:
+            # format: [0, 0, "filename", 0, 0]
+            if len(event) >= 3 and event[0] == 0 and event[1] == 0:
+                filename = event[2]
+                # Remove quotes if present
+                if isinstance(filename, str) and filename.startswith('"') and filename.endswith('"'):
+                    filename = filename[1:-1]
+                return filename
+        
+        return None
+
 def load(filename):
     with open(filename, 'r', encoding='utf8') as file:
         beatmap = Beatmap(file)
