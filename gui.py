@@ -5,6 +5,9 @@ import threading
 import time
 from dataclasses import dataclass
 from typing import Optional
+
+import keyboard
+
 import osu.rulesets.core as osu_core
 import torch
 from torch import FloatTensor
@@ -412,6 +415,8 @@ class OsuAIGUI:
             prev_time = 0
             last_time_change_time = time.time_ns() / float(1e6)
 
+            k1, k2 = False, False
+
             osu = self.osu
             while True:
                 # lets not hog the cpu guys
@@ -428,6 +433,8 @@ class OsuAIGUI:
                         or self.play_frames_cache.get(cache_key) is None:
                     # it takes more than 0.5 secs to do anything lol
                     time.sleep(0.5)
+                    k1 = False
+                    k2 = False
                     continue
 
                 frames = self.play_frames_cache[cache_key]
@@ -462,10 +469,13 @@ class OsuAIGUI:
                         time_passed = curr - last_frame_change_time
 
                         t = float(time_passed) / REPLAY_SAMPLING_RATE
-                        x1, y1 = frames[frame]
-                        x2, y2 = frames[frame + 1]
+                        x1, y1, _, _ = frames[frame]
+                        x2, y2, _, _ = frames[frame + 1]
                         x = x1 + (x2 - x1) * t
                         y = y1 + (y2 - y1) * t
+                        # no change in key states
+                        key1 = k1
+                        key2 = k2
                         # SAITAMA SERIOUS SIDE STEPS??
                         # x = 0
                         # y = 0
@@ -476,12 +486,27 @@ class OsuAIGUI:
                         # play new frame
                         prev_frame = frame
                         last_frame_change_time = curr
-                        x, y = frames[frame]
+                        x, y, key1, key2 = frames[frame]
+
 
                     x = (x + 0.5) * osu_core.SCREEN_WIDTH
                     y = (y + 0.5) * osu_core.SCREEN_HEIGHT
                     (x, y) = osu_core.osu_to_screen_pixel(x, y)
                     mouse.move(x, y)
+                    # if key1 (current state) is down but k1 (the previous state) is up, then
+                    # press k1
+                    if key1 and not k1:
+                        keyboard.press('z')
+                    elif not key1 and k1:
+                        keyboard.release('z')
+
+                    if key2 and not k2:
+                        keyboard.press('x')
+                    elif not key2 and k2:
+                        keyboard.release('x')
+
+                    k1 = key1
+                    k2 = key2
 
         threading.Thread(target=play_loop, daemon=True).start()
 

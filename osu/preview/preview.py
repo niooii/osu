@@ -203,7 +203,7 @@ def preview_replay_raw(ia_replay, beatmap_path: str, mods=None, audio_file=None)
                 for i in range(8):
                     trail_frame = int(frame - i)
                     if trail_frame > 0 and trail_frame < len(ia_replay):
-                        tx, ty = ia_replay[trail_frame]
+                        tx, ty, _, _ = ia_replay[trail_frame]
                         tx += 0.5
                         ty += 0.5
                         tx *= SCREEN_WIDTH
