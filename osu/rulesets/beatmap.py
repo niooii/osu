@@ -3,6 +3,7 @@ from datetime import time
 
 from . import core, hitobjects, timing_points
 from ._util.bsearch import bsearch
+from .mods import Mods
 
 import re
 
@@ -89,10 +90,7 @@ class Beatmap:
 
         self.format_version = file.format_version
         self.sections = file.read_all_sections()
-        self.dt = False
-        self.hr = False
-        self.ez = False
-        self.ht = False
+        self.mods = 0
         self._hr_hit_objects_cache = None  # Cache for HR-transformed hit objects
 
         if 'timing_points' in self.sections:
@@ -118,40 +116,41 @@ class Beatmap:
                 return section[key]
         return None
 
-    def apply_mods(self, mods: list[str]):
+    def apply_mods(self, mods: int):
         # Reset all mods first
         # self.dt = False
         # self.hr = False
         # self.ez = False
         # self.ht = False
         # self._hr_hit_objects_cache = None
+
+        # get the mods that only affect the gameplay
+        mods = mods & Mods.STD_GAMEPLAY_AFFECTING
         
         # Check for mutually exclusive mods
-        speed_mods = [mod for mod in mods if mod.lower() in ['dt', 'ht']]
-        difficulty_mods = [mod for mod in mods if mod.lower() in ['hr', 'ez']]
-        
-        if len(speed_mods) > 1:
-            raise ValueError(f"Speed mods DT and HT are mutually exclusive. Found: {speed_mods}")
-        if len(difficulty_mods) > 1:
-            raise ValueError(f"Difficulty mods HR and EZ are mutually exclusive. Found: {difficulty_mods}")
-        
-        for mod in mods:
-            mod = mod.lower()
-            # if mod not in ['dt', 'hr', 'ez', 'ht']:
-            #     raise ValueError(f"Invalid mod: {mod}. Only 'dt', 'hr', 'ez', and 'ht' are accepted/used.")
+        if mods & Mods.DOUBLE_TIME and mods & Mods.HALF_TIME:
+            raise ValueError("Tried to apply DT and HT.")
 
-            if mod == 'dt':
-                self.dt = True
-            elif mod == 'hr':
-                self.hr = True
-                self._create_hr_hit_objects_cache()
-            elif mod == 'ez':
-                self.ez = True
-            elif mod == 'ht':
-                self.ht = True
+        if mods & Mods.HARD_ROCK and mods & Mods.EASY:
+            raise ValueError("Tried to apply HR and EZ. pick a strugle buddy")
+
+        if mods & Mods.DOUBLE_TIME:
+            # do something
+            pass
+        if mods & Mods.HARD_ROCK:
+            # need to create hr objects bc the game area is flipped on X axis
+            self._create_hr_hit_objects_cache()
+        if mods & Mods.EASY:
+            # do something
+            pass
+        if mods & Mods.HALF_TIME:
+            # do something
+            pass
+
+        self.mods = mods
 
     def get_mods(self):
-        return (self.dt, self.hr, self.ez, self.ht)
+        return self.mods
 
     def base_approach_rate(self):
         """Returns the unmodified approach rate value from the beatmap"""
@@ -173,9 +172,9 @@ class Beatmap:
     def approach_rate_value(self):
         """Returns the approach rate value after mods are applied"""
         ar = self.base_approach_rate()
-        if self.ez:
+        if self.mods & Mods.EASY:
             ar = ar / 2
-        elif self.hr:
+        elif self.mods & Mods.HARD_ROCK:
             ar = min(ar * 1.4, 10)
         return ar
     
@@ -202,9 +201,9 @@ class Beatmap:
     def circle_size(self):
         """Returns the circle size value after mods are applied"""
         cs = self.base_circle_size()
-        if self.ez:
+        if self.mods & Mods.EASY:
             cs = cs / 2
-        elif self.hr:
+        elif self.mods & Mods.HARD_ROCK:
             cs = min(cs * 1.3, 10)
         return cs
     
@@ -249,9 +248,9 @@ class Beatmap:
     def hp_drain_rate(self):
         """Returns the HP drain rate value after mods are applied"""
         hp = self.base_hp_drain_rate()
-        if self.ez:
+        if self.mods & Mods.EASY:
             hp = hp / 2
-        elif self.hr:
+        elif self.mods & Mods.HARD_ROCK:
             hp = min(hp * 1.4, 10)
         return hp
 
@@ -262,9 +261,9 @@ class Beatmap:
     def overall_difficulty(self):
         """Returns the overall difficulty value after mods are applied"""
         od = self.base_overall_difficulty()
-        if self.ez:
+        if self.mods & Mods.EASY:
             od = od / 2
-        elif self.hr:
+        elif self.mods & Mods.HARD_ROCK:
             od = min(od * 1.4, 10)
         return od
     
@@ -283,7 +282,7 @@ class Beatmap:
     
     def transform_position(self, x, y):
         """Transform position coordinates based on active mods"""
-        if self.hr:
+        if self.mods & Mods.HARD_ROCK:
             # HR flips the beatmap vertically (around X-axis)
             y = core.SCREEN_HEIGHT - y
         return x, y
@@ -329,7 +328,7 @@ class Beatmap:
     @property
     def effective_hit_objects(self):
         """Return HR-transformed hit objects if HR is active, otherwise normal hit objects"""
-        if self.hr and self._hr_hit_objects_cache is not None:
+        if self.mods & Mods.HARD_ROCK and self._hr_hit_objects_cache is not None:
             return self._hr_hit_objects_cache
         return self.hit_objects
 

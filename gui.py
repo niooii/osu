@@ -10,6 +10,7 @@ import torch
 from torch import FloatTensor
 import osu.dataset as dataset
 import osu.rulesets.beatmap as bm
+from osu.rulesets.mods import Mods
 import osu.client.controller as controller
 from osu.gan import OsuReplayGAN
 from osu.rnn import OsuReplayRNN
@@ -78,13 +79,18 @@ def do_theming_stuff():
     return default_font
 
 
+def create_cache_key(map_md5: str, mods: int) -> tuple[str, int]:
+    return (map_md5, mods & Mods.STD_GAMEPLAY_AFFECTING)
+
+
 class OsuAIGUI:
     def __init__(self):
         self.map: Optional[CurrentBeatmapInfo] = None
-        self.map_cache: dict[str, bm.Beatmap] = dict()
-        self.map_frames_cache: dict[str, FloatTensor] = dict()
-        self.play_frames_cache: dict[str, np.ndarray] = dict()
+        self.map_cache: dict[tuple[str, int], bm.Beatmap] = dict()
+        self.map_frames_cache: dict[tuple[str, int], FloatTensor] = dict()
+        self.play_frames_cache: dict[tuple[str, int], np.ndarray] = dict()
         self.osu = controller.OSUController()
+        self.mods: int = 0
         self.map_background_texture = None
         self.rnn_weights_path: Optional[str] = None
         self.gan_weights_path: Optional[str] = None
@@ -92,6 +98,7 @@ class OsuAIGUI:
         self.gan: Optional[OsuReplayGAN] = None
         self.use_gan = True
         self.active = True
+        self.offset = 15
 
     def create_gui(self):
         dpg.create_context()
@@ -136,6 +143,8 @@ class OsuAIGUI:
                     # Difficulty text (inside map preview, upper right)
                     dtext = dpg.add_text("", tag="diff_text",
                                          pos=[10, 110], color=(255, 255, 255))
+
+            dpg.add_text("Mods: None", tag="mods_text", color=(255, 255, 255))
 
             dpg.add_separator()
 
@@ -195,14 +204,21 @@ class OsuAIGUI:
 
             # Settings section
             with dpg.collapsing_header(label="Settings"):
-                dpg.add_checkbox(label="Auto-generate on map change",
+                dpg.add_checkbox(label="Auto-generate (TODO)",
                                  tag="auto_generate", default_value=False)
-                dpg.add_slider_float(label="Playback Speed",
-                                     tag="playback_speed",
-                                     default_value=1.0,
-                                     min_value=0.1,
-                                     max_value=2.0,
-                                     format="%.1fx")
+
+                def set_offset():
+                    offset = dpg.get_value("offset")
+                    print(offset)
+                    self.offset = offset
+
+                dpg.add_slider_float(label="Offset",
+                                     tag="offset",
+                                     default_value=self.offset,
+                                     min_value=-100.0,
+                                     max_value=100.0,
+                                     format="%.1f ms",
+                                     callback=set_offset)
                 dpg.add_checkbox(label="Show Debug Info",
                                  tag="show_debug", default_value=False)
                 dpg.add_slider_int(label="Smoothing Factor",
@@ -218,7 +234,7 @@ class OsuAIGUI:
                 dpg.add_input_text(tag="debug_log",
                                    multiline=True,
                                    readonly=True,
-                                   width=size-40,
+                                   width=size - 40,
                                    height=100,
                                    default_value="Ready to start...\n")
 
@@ -289,24 +305,40 @@ class OsuAIGUI:
         try:
             osu = self.osu
             status = osu.game.status()
-            # 5 == song select, 2 == playing map
-            if status == 5 or status == 2:
+            # 5 == song select, 2 == playing map, 13 == multi song select (MULTI DOESNT WORK DONT TRY)
+            if status == 5 or status == 2 or status == 13:
+                before_md5 = self.map.md5 if self.map is not None else ""
+                before_mods = self.mods
+
                 map_md5 = osu.beatmap.md5()
-                if self.map and self.map.md5 == map_md5:
+                mods = osu.game.mods()
+                cache_key = create_cache_key(map_md5, mods)
+
+                if self.map and before_md5 == map_md5 and before_mods == mods:
                     return
                 map_path = osu.beatmap.osu_file_path()
-                if map_md5 not in self.map_cache:
-                    self.map_cache[map_md5] = bm.load(map_path)
+                if cache_key not in self.map_cache:
+                    self.map_cache[cache_key] = bm.load(map_path)
+                    self.map_cache[cache_key].apply_mods(mods)
 
                 self.map = CurrentBeatmapInfo(
                     osu_file=map_path,
-                    beatmap=self.map_cache[map_md5],
+                    beatmap=self.map_cache[cache_key],
                     md5=map_md5
                 )
-                self.update_beatmap_display()
+
+                self.mods = mods & Mods.STD_GAMEPLAY_AFFECTING
+
+                if before_md5 != map_md5:
+                    # map was changed
+                    self.update_beatmap_display()
+                if before_mods != mods:
+                    # mods were changed
+                    self.update_mods_display()
+
                 dpg.bind_item_theme(
                     "generate_play",
-                    "red_theme" if self.play_frames_cache.get(map_md5) is None else "green_theme"
+                    "red_theme" if self.play_frames_cache.get(cache_key) is None else "green_theme"
                 )
             else:
                 if self.map is not None:
@@ -314,6 +346,7 @@ class OsuAIGUI:
                     self.update_beatmap_display()
 
         except Exception as e:
+            print(e)
             pass
 
     def generate_play(self):
@@ -332,19 +365,21 @@ class OsuAIGUI:
         # Run generation in separate thread to avoid blocking UI
         def generate_thread():
             start_md5 = self.map.md5
-            if start_md5 not in self.map_frames_cache:
+            cache_key = create_cache_key(start_md5, self.mods)
+            if cache_key not in self.map_frames_cache:
                 data = dataset.input_data(self.map.beatmap)
+                print(data)
                 data = np.reshape(data.values, (-1, dataset.BATCH_LENGTH, len(dataset.INPUT_FEATURES)))
                 data = torch.FloatTensor(data)
-                self.map_frames_cache[start_md5] = data
+                self.map_frames_cache[cache_key] = data
 
             if self.use_gan:
-                play_data = self.gan.generate(self.map_frames_cache[self.map.md5])
+                play_data = self.gan.generate(self.map_frames_cache[cache_key])
             else:
-                play_data = self.rnn.generate(self.map_frames_cache[self.map.md5])
+                play_data = self.rnn.generate(self.map_frames_cache[cache_key])
 
             play_data = np.concatenate(play_data)
-            self.play_frames_cache[start_md5] = play_data
+            self.play_frames_cache[cache_key] = play_data
             self.log_message(f'play generated')
             dpg.bind_item_theme("generate_play", "green_theme")
 
@@ -371,35 +406,102 @@ class OsuAIGUI:
     def start_play_thread(self):
         import mouse
         def play_loop():
-            # only apply movement for a frame ONCE.
             prev_frame = 0
+            last_frame_change_time = time.time_ns() / float(1e6)
+
+            prev_time = 0
+            last_time_change_time = time.time_ns() / float(1e6)
 
             osu = self.osu
             while True:
                 # lets not hog the cpu guys
-                time.sleep(0.008)
+                time.sleep(0.003)
                 # check if we're in play mode
                 status = osu.game.status()
                 curr_md5 = osu.beatmap.md5()
-                if status != 2 or not self.active or not curr_md5 == self.map.md5\
-                        or self.play_frames_cache.get(curr_md5) is None:
+                if curr_md5 is None or status is None:
+                    continue
+
+                cache_key = create_cache_key(curr_md5, self.mods)
+
+                if status != 2 or not self.active or not curr_md5 == self.map.md5 \
+                        or self.play_frames_cache.get(cache_key) is None:
                     # it takes more than 0.5 secs to do anything lol
                     time.sleep(0.5)
                     continue
-                frames = self.play_frames_cache[curr_md5]
+
+                frames = self.play_frames_cache[cache_key]
                 curr_time = osu.game.play_time()
+                hp = osu.play.player_hp()
+                if hp is None:
+                    continue
+
+                curr_unix_ms = time.time_ns() / float(1e6)
+
+                if prev_time != curr_time:
+                    prev_time = curr_time
+                    last_time_change_time = curr_unix_ms
 
                 REPLAY_SAMPLING_RATE = 24
-                frame = int((curr_time - self.map.beatmap.start_offset()) // REPLAY_SAMPLING_RATE)
-                if 0 < frame < len(frames) and prev_frame != frame:
-                    prev_frame = frame
-                    x, y = frames[frame]
+
+                # if the prev_time didn't change for PAUSE_THRESHOLD ms, then we're paused.
+                PAUSE_THRESHOLD = 40
+                frame = int((curr_time - self.map.beatmap.start_offset() + self.offset) // REPLAY_SAMPLING_RATE)
+
+                paused = (curr_unix_ms - last_time_change_time) > PAUSE_THRESHOLD
+
+                if 0 < frame < len(frames) and not paused:
+                    curr = time.time_ns() / float(1e6)
+                    time_passed = curr - last_frame_change_time
+                    if prev_frame == frame and time_passed <= REPLAY_SAMPLING_RATE:
+                        # do some extrapolation stuff
+                        if frame == len(frames) - 1:
+                            continue
+
+                        curr = time.time_ns() / float(1e6)
+                        time_passed = curr - last_frame_change_time
+
+                        t = float(time_passed) / REPLAY_SAMPLING_RATE
+                        x1, y1 = frames[frame]
+                        x2, y2 = frames[frame + 1]
+                        x = x1 + (x2 - x1) * t
+                        y = y1 + (y2 - y1) * t
+                        # SAITAMA SERIOUS SIDE STEPS??
+                        # x = 0
+                        # y = 0
+                        # print(f'interpolated {x}, {y}')
+                        # print(f't = {t}')
+                        # print(f'{x1} -> {x2},\n {y1} -> {y2}')
+                    else:
+                        # play new frame
+                        prev_frame = frame
+                        last_frame_change_time = curr
+                        x, y = frames[frame]
+
                     x = (x + 0.5) * osu_core.SCREEN_WIDTH
                     y = (y + 0.5) * osu_core.SCREEN_HEIGHT
                     (x, y) = osu_core.osu_to_screen_pixel(x, y)
                     mouse.move(x, y)
 
         threading.Thread(target=play_loop, daemon=True).start()
+
+    def update_mods_display(self):
+        mods = self.mods
+        mods_str = f''
+        if mods & Mods.HALF_TIME:
+            mods_str += 'HT, '
+        elif mods & Mods.DOUBLE_TIME:
+            mods_str += 'DT, '
+
+        if mods & Mods.EASY:
+            mods_str += 'EZ, '
+        elif mods & Mods.HARD_ROCK:
+            mods_str += 'HR, '
+
+        if len(mods_str) > 0:
+            mods_str = mods_str[:-2]
+
+        dpg.set_value("mods_text", f'Mods: {"None" if len(mods_str) == 0 else mods_str}')
 
     def update_beatmap_display(self):
         """Update the beatmap display with current map info"""
@@ -524,9 +626,6 @@ class OsuAIGUI:
 
 def main():
     gui = OsuAIGUI()
-    while True:
-        if gui.osu.game.status() == 2:
-            print(gui.osu.play.playing_mods())
     gui.create_gui()
     gui.run()
 

@@ -2,8 +2,5 @@
 <project version="4">
   <component name="VcsDirectoryMappings">
     <mapping directory="" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/ProcessMemoryDataFinder" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/gosumemory" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/osu-trainer" vcs="Git" />
   </component>
 </project>

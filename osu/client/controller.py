@@ -53,7 +53,11 @@ class BeatmapNamespace:
         return f'{OSU_PATH}/Songs/{self.folder_name()}/{self.osu_file_name()}'
     
     def md5(self) -> str:
-        return self._controller.read_value("MapMd5")
+        try:
+            return self._controller.read_value("MapMd5")
+        except Exception as e:
+            print(e)
+            return None
     
     def ar(self) -> float:
         return self._controller.read_value("MapAr")
@@ -106,7 +110,11 @@ class PlayNamespace:
         return self._controller.read_value("HitMiss")
     
     def player_hp(self) -> float:
-        return self._controller.read_value("PlayerHp")
+        try:
+            return self._controller.read_value("PlayerHp")
+        except Exception as e:
+            print(e)
+            return None
     
     def player_hp_smoothed(self) -> float:
         return self._controller.read_value("PlayerHpSmoothed")
