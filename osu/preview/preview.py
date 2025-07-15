@@ -59,6 +59,10 @@ def preview_replay_raw(ia_replay, beatmap_path: str, mods=None, audio_file=None)
     preview = beatmap_preview.from_beatmap(beatmap)
 
     trail = []
+    
+    # Track key states for press/release detection
+    prev_k1 = False
+    prev_k2 = False
 
     if audio_file and os.path.exists(audio_file):
         # Note: pygame doesn't support speed changes, so audio won't match DT/HT timing
@@ -168,13 +172,28 @@ def preview_replay_raw(ia_replay, beatmap_path: str, mods=None, audio_file=None)
 
         frame = int((time - beatmap.start_offset()) // REPLAY_SAMPLING_RATE)
         # print(f'we on frame {frame}')
-        if frame > 0 and frame < len(ia_replay):
-            x, y = ia_replay[frame]
+        if 0 < frame < len(ia_replay):
+            x, y, k1, k2 = ia_replay[frame]
             x += 0.5
             y += 0.5
             x *= SCREEN_WIDTH
             y *= SCREEN_HEIGHT
             pygame.draw.circle(screen, (0, 255, 0), (int(x), int(y)), 8)
+            
+            # Detect key press/release events
+            if k1 and not prev_k1:
+                print("k1 pressed")
+            elif not k1 and prev_k1:
+                print("k1 released")
+            
+            if k2 and not prev_k2:
+                print("k2 pressed")
+            elif not k2 and prev_k2:
+                print("k2 released")
+            
+            # Update previous key states
+            prev_k1 = k1
+            prev_k2 = k2
 
             # Update trail for seeking/dragging
             if dragging_progress:

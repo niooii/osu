@@ -45,7 +45,7 @@ class Replay:
         total = self.n_300s + self.n_100s + self.n_50s + self.n_misses
         self.accuracy = (self.n_300s + self.n_100s / 3 + self.n_50s / 6) / total
 
-        self.mods = Mod(read_int(file))
+        self.mods = read_int(file)
 
         life_graph = read_binary_string(file)
         self.life_graph = [t.split('|') for t in life_graph.split(',')[:-1]]

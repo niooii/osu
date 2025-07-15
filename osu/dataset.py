@@ -22,7 +22,7 @@ BATCH_LENGTH = 2048
 FRAME_RATE = 24
 
 # Feature index
-INPUT_FEATURES = ['x', 'y', 'visible', 'is_slider', 'is_spinner']
+INPUT_FEATURES = ['x', 'y', 'time_until_active', 'is_slider', 'is_spinner']
 # k1 and k2 are the key presses (z, x). no mouse buttons because
 # who really uses mouse buttons tbh, dataset will convert
 # m1 and m2 into k1 and k2 respectively.
@@ -31,7 +31,7 @@ OUTPUT_FEATURES = ['x', 'y', 'k1', 'k2']
 # Default beatmap frame information
 _DEFAULT_BEATMAP_FRAME = (
     osu_core.SCREEN_WIDTH / 2, osu_core.SCREEN_HEIGHT / 2,  # x, y
-    float("inf"), False, False  # time_left, is_slider, is_spinner
+    1.0, False, False  # time_left, is_slider, is_spinner
 )
 
 
@@ -118,18 +118,7 @@ def load(files, verbose=0) -> pd.DataFrame:
             replays.append(replay)
             if cache_key not in beatmap_cache:
                 beatmap_cache[cache_key] = osu_beatmap.load(row['beatmap'])
-                # erm
-                if replay.has_mods(osu_replay.Mod.DT):
-                    beatmap_cache[cache_key].apply_mods(['dt'])
-                if replay.has_mods(osu_replay.Mod.HT):
-                    beatmap_cache[cache_key].apply_mods(['ht'])
-                if replay.has_mods(osu_replay.Mod.EZ):
-                    beatmap_cache[cache_key].apply_mods(['ez'])
-                if replay.has_mods(osu_replay.Mod.HR):
-                    # print("applying hr")
-                    # print('cache key:')
-                    # print(cache_key)
-                    beatmap_cache[cache_key].apply_mods(['hr'])
+                beatmap_cache[cache_key].apply_mods(replay.mods)
 
             beatmaps.append(beatmap_cache[cache_key])
 
@@ -155,7 +144,7 @@ def replay_to_output_data(beatmap: osu_beatmap.Beatmap, replay: osu_replay.Repla
 
     chunk = []
     for time in range(beatmap.start_offset(), beatmap.length(), FRAME_RATE):
-        x, y = _replay_frame(beatmap, replay, time)
+        x, y, k1, k2 = _replay_frame(beatmap, replay, time)
 
         chunk.append(np.array([x - 0.5, y - 0.5]))
 
@@ -251,6 +240,7 @@ def _beatmap_frame(beatmap, time):
         beat_duration = beatmap.beat_duration(obj.time)
         px, py = obj.target_position(time, beat_duration, beatmap['SliderMultiplier'])
         time_left = obj.time - time
+        preempt, _ = beatmap.approach_rate()
         is_slider = int(isinstance(obj, hitobjects.Slider))
         is_spinner = int(isinstance(obj, hitobjects.Spinner))
     else:
@@ -259,7 +249,7 @@ def _beatmap_frame(beatmap, time):
     px = max(0, min(px / osu_core.SCREEN_WIDTH, 1))
     py = max(0, min(py / osu_core.SCREEN_HEIGHT, 1))
 
-    return px, py, time_left, is_slider, is_spinner
+    return px, py, max(0, min(time_left / preempt, 1)), is_slider, is_spinner
 
 
 def _replay_frame(beatmap, replay, time):
@@ -297,16 +287,16 @@ def get_beatmap_time_data(beatmap: osu_beatmap.Beatmap) -> []:
                 frame = _DEFAULT_BEATMAP_FRAME
             else:
                 frame = list(last_ok_frame)
-                frame[2] = float("inf")
+                frame[2] = 1.0
         else:
             last_ok_frame = frame
 
-        px, py, time_left, is_slider, is_spinner = frame
+        px, py, visible, is_slider, is_spinner = frame
 
         chunk.append(np.array([
             px - 0.5,
             py - 0.5,
-            time_left < preempt,
+            visible,
 
             is_slider,
             is_spinner
