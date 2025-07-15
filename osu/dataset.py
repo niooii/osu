@@ -15,6 +15,7 @@ import osu.rulesets.beatmap as osu_beatmap
 import osu.rulesets.core as osu_core
 import osu.rulesets.hitobjects as hitobjects
 import osu.rulesets.replay as osu_replay
+from osu.rulesets.keys import Keys
 
 # Constants
 BATCH_LENGTH = 2048
@@ -22,7 +23,10 @@ FRAME_RATE = 24
 
 # Feature index
 INPUT_FEATURES = ['x', 'y', 'visible', 'is_slider', 'is_spinner']
-OUTPUT_FEATURES = ['x', 'y']
+# k1 and k2 are the key presses (z, x). no mouse buttons because
+# who really uses mouse buttons tbh, dataset will convert
+# m1 and m2 into k1 and k2 respectively.
+OUTPUT_FEATURES = ['x', 'y', 'k1', 'k2']
 
 # Default beatmap frame information
 _DEFAULT_BEATMAP_FRAME = (
@@ -181,9 +185,9 @@ def target_data(dataset: pd.DataFrame, verbose=False):
         chunk = []
 
         for time in range(beatmap.start_offset(), beatmap.length(), FRAME_RATE):
-            x, y = _replay_frame(beatmap, replay, time)
+            x, y, k1, k2 = _replay_frame(beatmap, replay, time)
 
-            chunk.append(np.array([x - 0.5, y - 0.5]))
+            chunk.append(np.array([x - 0.5, y - 0.5, k1, k2]))
 
             if len(chunk) == BATCH_LENGTH:
                 target_data.append(chunk)
@@ -259,10 +263,17 @@ def _beatmap_frame(beatmap, time):
 
 
 def _replay_frame(beatmap, replay, time):
-    x, y, _ = replay.frame(time)
+    x, y, keys = replay.frame(time)
+
+    k1, k2 = False, False
+    if keys & Keys.K1 or keys & Keys.M1:
+        k1 = True
+    if keys & Keys.K2 or keys & Keys.M2:
+        k2 = True
+
     x = max(0, min(x / osu_core.SCREEN_WIDTH, 1))
     y = max(0, min(y / osu_core.SCREEN_HEIGHT, 1))
-    return x, y
+    return x, y, k1, k2
 
 
 def get_beatmap_time_data(beatmap: osu_beatmap.Beatmap) -> []:
@@ -296,6 +307,7 @@ def get_beatmap_time_data(beatmap: osu_beatmap.Beatmap) -> []:
             px - 0.5,
             py - 0.5,
             time_left < preempt,
+
             is_slider,
             is_spinner
         ]))
