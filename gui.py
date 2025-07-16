@@ -17,6 +17,7 @@ from osu.rulesets.mods import Mods
 import osu.client.controller as controller
 from osu.gan import OsuReplayGAN
 from osu.rnn import OsuReplayRNN
+from osu.keys import OsuKeyModel
 from osu.rulesets.core import OSU_PATH
 from PIL import Image, ImageFilter, ImageEnhance
 import numpy as np
@@ -97,8 +98,10 @@ class OsuAIGUI:
         self.map_background_texture = None
         self.rnn_weights_path: Optional[str] = None
         self.gan_weights_path: Optional[str] = None
+        self.key_weights_path: Optional[str] = None
         self.rnn: Optional[OsuReplayRNN] = None
         self.gan: Optional[OsuReplayGAN] = None
+        self.key_model: Optional[OsuKeyModel] = None
         self.use_gan = True
         self.active = True
         self.offset = 15
@@ -170,11 +173,19 @@ class OsuAIGUI:
                     dpg.add_text(f"Loaded weights: ")
                     dpg.add_text(f"None", tag="gan_weights")
 
+                dpg.add_button(label="Load Keys",
+                               callback=self.load_key_weights,
+                               width=140, height=30)
+
+                with dpg.group(horizontal=True):
+                    dpg.add_text(f"Loaded weights: ")
+                    dpg.add_text(f"None", tag="key_weights")
+
                 def toggle_gan():
                     curr = dpg.get_value("use_gan")
                     self.use_gan = curr
 
-                dpg.add_checkbox(label="Use GAN", default_value=self.use_gan,
+                dpg.add_checkbox(label="Use GAN for Position", default_value=self.use_gan,
                                  callback=toggle_gan, tag="use_gan")
 
             # Control buttons
@@ -283,12 +294,27 @@ class OsuAIGUI:
         path = fd.askopenfilename(initialdir=".")
         if path is not None and os.path.exists(path):
             try:
-                self.gan = OsuReplayGAN.load_generator_only(path)
+                self.gan = OsuReplayGAN.load(path)
                 self.gan_weights_path = path
                 dpg.set_value("gan_weights", os.path.basename(path))
+                dpg.bind_item_theme("gan_weights", "green_theme")
             except Exception as e:
                 dpg.set_value("gan_weights", f"Invalid")
-                print(e)
+                dpg.bind_item_theme("gan_weights", "red_theme")
+                print(f'Error loading gan weights: {e}')
+
+    def load_key_weights(self):
+        path = fd.askopenfilename(initialdir=".")
+        if path is not None and os.path.exists(path):
+            try:
+                self.key_model = OsuKeyModel.load(path)
+                self.key_weights_path = path
+                dpg.set_value("key_weights", os.path.basename(path))
+                dpg.bind_item_theme("key_weights", "green_theme")
+            except Exception as e:
+                dpg.set_value("key_weights", f"Invalid")
+                dpg.bind_item_theme("key_weights", "red_theme")
+                print(f'Error loading key weights: {e}')
 
     def log_message(self, message: str):
         """Add message to debug log"""
@@ -358,11 +384,15 @@ class OsuAIGUI:
             return
 
         if self.use_gan and self.gan is None:
-            self.log_message(f'using the GAN to generate the play, but no weights were loaded')
+            self.log_message(f'using the GAN to generate positions, but no GAN weights were loaded')
             return
 
         if not self.use_gan and self.rnn is None:
-            self.log_message(f'using the RNN to generate the play, but no weights were loaded')
+            self.log_message(f'using the RNN to generate positions, but no RNN weights were loaded')
+            return
+
+        if self.key_model is None:
+            self.log_message(f'no key model weights were loaded')
             return
 
         # Run generation in separate thread to avoid blocking UI
@@ -371,19 +401,28 @@ class OsuAIGUI:
             cache_key = create_cache_key(start_md5, self.mods)
             if cache_key not in self.map_frames_cache:
                 data = dataset.input_data(self.map.beatmap)
-                print(data)
                 data = np.reshape(data.values, (-1, dataset.BATCH_LENGTH, len(dataset.INPUT_FEATURES)))
                 data = torch.FloatTensor(data)
                 self.map_frames_cache[cache_key] = data
 
+            # Generate positions
             if self.use_gan:
-                play_data = self.gan.generate(self.map_frames_cache[cache_key])
+                position_data = self.gan.generate(self.map_frames_cache[cache_key])
             else:
-                play_data = self.rnn.generate(self.map_frames_cache[cache_key])
+                position_data = self.rnn.generate(self.map_frames_cache[cache_key])
 
-            play_data = np.concatenate(play_data)
+            # Generate keys
+            key_data = self.key_model.generate(self.map_frames_cache[cache_key])
+
+            # Concatenate positions and keys
+            position_data = np.concatenate(position_data)
+            key_data = np.concatenate(key_data)
+            
+            # Combine into [x, y, k1, k2] format
+            play_data = np.concatenate([position_data, key_data], axis=-1)
+
             self.play_frames_cache[cache_key] = play_data
-            self.log_message(f'play generated')
+            self.log_message(f'play generated (positions: {"GAN" if self.use_gan else "RNN"}, keys: KeyModel)')
             dpg.bind_item_theme("generate_play", "green_theme")
 
         threading.Thread(target=generate_thread, daemon=True).start()
@@ -429,12 +468,17 @@ class OsuAIGUI:
 
                 cache_key = create_cache_key(curr_md5, self.mods)
 
-                if status != 2 or not self.active or not curr_md5 == self.map.md5 \
-                        or self.play_frames_cache.get(cache_key) is None:
-                    # it takes more than 0.5 secs to do anything lol
-                    time.sleep(0.5)
+                if (status != 2 or self.map is None or
+                        not self.active or not curr_md5 == self.map.md5
+                        or self.play_frames_cache.get(cache_key) is None):
                     k1 = False
                     k2 = False
+                    # print(f'status: {status}')
+                    # print(f'cache_key: {cache_key}')
+                    # print(f'active: {self.active}')
+                    # print(f'md5s: {curr_md5} == {self.map.md5}?')
+                    # it takes more than 0.5 secs to do anything lol
+                    time.sleep(0.5)
                     continue
 
                 frames = self.play_frames_cache[cache_key]
@@ -507,6 +551,10 @@ class OsuAIGUI:
 
                     k1 = key1
                     k2 = key2
+
+                else:
+                    print("paused or something")
+                    pass
 
         threading.Thread(target=play_loop, daemon=True).start()
 

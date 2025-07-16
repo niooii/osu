@@ -22,7 +22,7 @@ BATCH_LENGTH = 2048
 FRAME_RATE = 24
 
 # Feature index
-INPUT_FEATURES = ['x', 'y', 'time_until_active', 'is_slider', 'is_spinner']
+INPUT_FEATURES = ['x', 'y', 'time_until_click', 'is_slider', 'is_spinner']
 # k1 and k2 are the key presses (z, x). no mouse buttons because
 # who really uses mouse buttons tbh, dataset will convert
 # m1 and m2 into k1 and k2 respectively.
@@ -31,7 +31,7 @@ OUTPUT_FEATURES = ['x', 'y', 'k1', 'k2']
 # Default beatmap frame information
 _DEFAULT_BEATMAP_FRAME = (
     osu_core.SCREEN_WIDTH / 2, osu_core.SCREEN_HEIGHT / 2,  # x, y
-    1.0, False, False  # time_left, is_slider, is_spinner
+    2.0, False, False  # time_until_click (seconds), is_slider, is_spinner
 )
 
 
@@ -249,7 +249,7 @@ def _beatmap_frame(beatmap, time):
     px = max(0, min(px / osu_core.SCREEN_WIDTH, 1))
     py = max(0, min(py / osu_core.SCREEN_HEIGHT, 1))
 
-    return px, py, max(0, min(time_left / preempt, 1)), is_slider, is_spinner
+    return px, py, max(0, min(time_left / 1000, 2.0)), is_slider, is_spinner
 
 
 def _replay_frame(beatmap, replay, time):
@@ -287,16 +287,16 @@ def get_beatmap_time_data(beatmap: osu_beatmap.Beatmap) -> []:
                 frame = _DEFAULT_BEATMAP_FRAME
             else:
                 frame = list(last_ok_frame)
-                frame[2] = 1.0
+                frame[2] = 2.0
         else:
             last_ok_frame = frame
 
-        px, py, visible, is_slider, is_spinner = frame
+        px, py, time_until_click, is_slider, is_spinner = frame
 
         chunk.append(np.array([
             px - 0.5,
             py - 0.5,
-            visible,
+            time_until_click,
 
             is_slider,
             is_spinner
