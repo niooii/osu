@@ -398,6 +398,7 @@ class OsuAIGUI:
         # Run generation in separate thread to avoid blocking UI
         def generate_thread():
             start_md5 = self.map.md5
+            beatmap = self.map.beatmap
             cache_key = create_cache_key(start_md5, self.mods)
             if cache_key not in self.map_frames_cache:
                 data = dataset.input_data(self.map.beatmap)
@@ -483,6 +484,14 @@ class OsuAIGUI:
 
                 frames = self.play_frames_cache[cache_key]
                 curr_time = osu.game.play_time()
+                curr_time_mult = 1
+                # we wanna scale back the time because we generated the play with
+                # a time-scaled version of the map
+                if self.mods & Mods.DOUBLE_TIME:
+                    curr_time_mult = 2/3.0
+                elif self.mods & Mods.HALF_TIME:
+                    curr_time_mult = 1.5
+                curr_time *= curr_time_mult
                 hp = osu.play.player_hp()
                 if hp is None:
                     continue

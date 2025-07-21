@@ -96,7 +96,8 @@ class Beatmap:
         self._hr_hit_objects_cache = None  # Cache for HR-transformed hit objects
 
         if 'timing_points' in self.sections:
-            self.timing_points = list(map(timing_points.create, self.sections['timing_points']))
+            self.og_timing_points = list(map(timing_points.create, self.sections['timing_points']))
+            self.timing_points = self.og_timing_points[:]
             del self.sections['timing_points']
 
         if 'hit_objects' in self.sections:
@@ -130,6 +131,12 @@ class Beatmap:
                 new_obj.end_time *= time_scale
             self.hit_objects.append(new_obj)
 
+        self.timing_points.clear()
+        for tp in self.og_timing_points:
+            new_tp = copy.deepcopy(tp)
+            new_tp.offset *= time_scale
+            self.timing_points.append(new_tp)
+
         if self.mods & Mods.HARD_ROCK:
             self._create_hr_hit_objects_cache()
 
@@ -162,7 +169,7 @@ class Beatmap:
             # do something
             pass
         if mods & Mods.HALF_TIME:
-            self.apply_time_scale(4/3)
+            self.apply_time_scale(1.5)
             pass
 
         self.mods = mods
@@ -391,7 +398,7 @@ class Beatmap:
 
     def _timing(self, time):
         bpm = None
-        i = bsearch(self.timing_point, time, lambda tp: tp.time)
+        i = bsearch(self.timing_points, time, lambda tp: tp.offset)
         timing_point = self.timing_points[i - 1]
 
         for tp in self.timing_points[i:]:
@@ -414,13 +421,8 @@ class Beatmap:
         if beat_duration < 0:
             return bpm * -beat_duration / 100
 
-        mult = 1
-        if self.mods & Mods.DOUBLE_TIME:
-            mult = 2 / 3.0
-        elif self.mods & Mods.HALF_TIME:
-            mult = 1.5
-
-        return beat_duration * mult
+        # No mod scaling here - time scaling in apply_time_scale() handles everything
+        return beat_duration
 
     def visible_objects(self, time, count=None):
         objects = []

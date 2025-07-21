@@ -60,9 +60,16 @@ class Replay:
 
         self.data = []
         offset = 0
+
+        mult = 1
+        if self.has_mods(Mod.DT):
+            mult = 2/3.0
+        elif self.has_mods(Mod.HT):
+            mult = 1.5
+
         for w, x, y, z in data:
             offset += w
-            self.data.append((offset, x, y, z))
+            self.data.append((offset * mult, x, y, z))
 
         self.data = list(sorted(self.data))
 

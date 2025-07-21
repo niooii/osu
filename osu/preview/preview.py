@@ -66,8 +66,12 @@ def preview_replay_raw(ia_replay, beatmap_path: str, mods=None, audio_file=None)
     prev_k2 = False
 
     if audio_file and os.path.exists(audio_file):
-        # Note: pygame doesn't support speed changes, so audio won't match DT/HT timing
-        pygame.mixer.music.play(start=beatmap['AudioLeadIn'] / 1000)
+        # pygame doesn't support speed changes, so audio won't match DT/HT timing
+        # so kill it for now
+        if beatmap.mods & Mods.DOUBLE_TIME or beatmap.mods & Mods.HALF_TIME:
+            pass
+        else:
+            pygame.mixer.music.play(start=beatmap['AudioLeadIn'] / 1000)
 
     running = True
     paused = False
@@ -159,7 +163,6 @@ def preview_replay_raw(ia_replay, beatmap_path: str, mods=None, audio_file=None)
 
             if len(visible_objects) > 0:
                 delta = visible_objects[0].time - time
-                print(f'slider multiplier: {beatmap.slider_multiplier()}')
                 ox, oy = visible_objects[0].target_position(time, beatmap.beat_duration(time), beatmap.slider_multiplier())
 
                 if delta > 0:
