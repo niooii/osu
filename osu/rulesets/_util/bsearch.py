@@ -9,7 +9,7 @@ def bsearch(list, target, func):
 		obj_time = func(list[i])
 
 		if obj_time > target:
-			end = i - 1
+			end = i
 		elif obj_time < target:
 			beg = i + 1
 		else:

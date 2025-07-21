@@ -3,6 +3,7 @@
 .trained
 .env
 .checkpoints
+.datasets
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

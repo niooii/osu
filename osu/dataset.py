@@ -22,7 +22,21 @@ BATCH_LENGTH = 2048
 FRAME_RATE = 24
 
 # Feature index
-INPUT_FEATURES = ['x', 'y', 'time_until_click', 'is_slider', 'is_spinner']
+INPUT_FEATURES = [
+    'x', 'y',
+    'time_until_click', # in seconds
+    'is_slider', # bool
+    'is_spinner', # bool
+    'cs', # normalized from 0-1 (cs value / 10)
+    'slider_speed', # (slider pixel len / duration) / 600
+    'slider_len' # osu pixel len / 600
+]
+
+MAX_TIME_UNTIL_CLICK = 2.0
+DEFAULT_CS = 0.4
+DEFAULT_SLIDER_LEN = 0
+DEFAULT_SLIDER_SPEED = 0
+
 # k1 and k2 are the key presses (z, x). no mouse buttons because
 # who really uses mouse buttons tbh, dataset will convert
 # m1 and m2 into k1 and k2 respectively.
@@ -31,7 +45,8 @@ OUTPUT_FEATURES = ['x', 'y', 'k1', 'k2']
 # Default beatmap frame information
 _DEFAULT_BEATMAP_FRAME = (
     osu_core.SCREEN_WIDTH / 2, osu_core.SCREEN_HEIGHT / 2,  # x, y
-    2.0, False, False  # time_until_click (seconds), is_slider, is_spinner
+    MAX_TIME_UNTIL_CLICK, False, False,  # time_until_click (seconds), is_slider, is_spinner
+    DEFAULT_CS, DEFAULT_SLIDER_SPEED, DEFAULT_SLIDER_LEN
 )
 
 
@@ -105,15 +120,6 @@ def load(files, verbose=0) -> pd.DataFrame:
             beatmap_path: str = row['beatmap']
             replay: osu_replay.Replay = osu_replay.load(row['replay'])
             cache_key = (beatmap_path, replay.mods)
-            if replay.has_mods(osu_replay.Mod.DT, osu_replay.Mod.HT):
-                if verbose:
-                    print('DT, HT are not supported yet.')
-                continue
-
-            # TODO temp exclusion until i figure out why the training data is
-            # so horrible and the model is learning nothing if i include hr replays
-            # if replay.has_mods(osu_replay.Mod.HR, osu_replay.Mod.EZ):
-            #     continue
 
             replays.append(replay)
             if cache_key not in beatmap_cache:
@@ -135,7 +141,7 @@ def load(files, verbose=0) -> pd.DataFrame:
     return pd.DataFrame(list(zip(replays, beatmaps)), columns=['replay', 'beatmap'])
 
 
-_memo = {}
+# Removed _memo cache - memoization breaks time-series alignment with target_data
 
 
 # extract the data for a single replay
@@ -243,13 +249,38 @@ def _beatmap_frame(beatmap, time):
         preempt, _ = beatmap.approach_rate()
         is_slider = int(isinstance(obj, hitobjects.Slider))
         is_spinner = int(isinstance(obj, hitobjects.Spinner))
+        circle_size = beatmap.circle_size() / 10.0
+        
+        # calculate slider speed (px per second)
+        if isinstance(obj, hitobjects.Slider):
+            slider_duration = obj.duration(beat_duration, beatmap.slider_multiplier())
+            if slider_duration > 0:
+                slider_speed = (obj.pixel_length / slider_duration) / 600.0
+            else:
+                slider_speed = DEFAULT_SLIDER_SPEED
+        else:
+            slider_speed = DEFAULT_SLIDER_SPEED
+            
+        # calculate slider length
+        if isinstance(obj, hitobjects.Slider):
+            slider_len = obj.pixel_length / 600.0
+        else:
+            slider_len = DEFAULT_SLIDER_LEN
     else:
         return None
 
     px = max(0, min(px / osu_core.SCREEN_WIDTH, 1))
     py = max(0, min(py / osu_core.SCREEN_HEIGHT, 1))
 
-    return px, py, max(0, min(time_left / 1000, 2.0)), is_slider, is_spinner
+    return (
+        px, py,
+        max(0, min(time_left / 1000, MAX_TIME_UNTIL_CLICK)),
+        is_slider,
+        is_spinner,
+        circle_size,
+        slider_speed,
+        slider_len
+    )
 
 
 def _replay_frame(beatmap, replay, time):
@@ -267,13 +298,12 @@ def _replay_frame(beatmap, replay, time):
 
 
 def get_beatmap_time_data(beatmap: osu_beatmap.Beatmap) -> []:
-    if beatmap in _memo:
-        return _memo[beatmap]
-
+    # Removed memoization to ensure one-to-one correspondence with target_data
+    # Each (beatmap, replay) pair must generate its own chunks for proper alignment
+    
     if len(beatmap.effective_hit_objects) == 0:
         return None
 
-    _memo[beatmap] = []
     data = []
     chunk = []
     preempt, _ = beatmap.approach_rate()
@@ -287,29 +317,29 @@ def get_beatmap_time_data(beatmap: osu_beatmap.Beatmap) -> []:
                 frame = _DEFAULT_BEATMAP_FRAME
             else:
                 frame = list(last_ok_frame)
-                frame[2] = 2.0
+                frame[2] = MAX_TIME_UNTIL_CLICK
         else:
             last_ok_frame = frame
 
-        px, py, time_until_click, is_slider, is_spinner = frame
+        px, py, time_until_click, is_slider, is_spinner, circle_size, slider_speed, slider_len = frame
 
         chunk.append(np.array([
             px - 0.5,
             py - 0.5,
             time_until_click,
-
             is_slider,
-            is_spinner
+            is_spinner,
+            circle_size,
+            slider_speed,
+            slider_len
         ]))
 
         if len(chunk) == BATCH_LENGTH:
             data.append(chunk)
-            _memo[beatmap].append(chunk)
             chunk = []
 
     if len(chunk) > 0:
         data.append(chunk)
-        _memo[beatmap].append(chunk)
 
     return data
 
@@ -319,7 +349,6 @@ def input_data(dataset, verbose=False) -> pd.DataFrame:
     new DataFrame with beatmap object information across time."""
 
     data = []
-    global _memo
 
     if isinstance(dataset, osu_beatmap.Beatmap):
         beatmaps_list = [(dataset,)]

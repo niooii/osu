@@ -409,7 +409,7 @@ class Slider(HitCircle):
 		# Fallback: return the last point
 		return curve_points[-1]
 
-	def target_position(self, time:int, beat_duration:float, multiplier:float=1.0):
+	def target_position(self, time: int, beat_duration: float, multiplier: float=1.0):
 		return self.current_curve_point(time, beat_duration, multiplier)
 
 class Spinner(HitObject):

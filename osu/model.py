@@ -6,6 +6,9 @@ class PosModel(nn.Module):
     def __init__(self, input_size, noise_std=0.0):
         super(PosModel, self).__init__()
         self.lstm = nn.LSTM(input_size, 128, num_layers=2, batch_first=True, dropout=0.2)
+
+        # attention takes way too many resources
+        # self.attention = nn.MultiheadAttention(128, num_heads=4, batch_first=True)
         self.dense1 = nn.Linear(128, 128)
         self.noise_std = noise_std
         self.dense2 = nn.Linear(128, 64)
@@ -14,7 +17,12 @@ class PosModel(nn.Module):
     def forward(self, x):
         lstm_out, _ = self.lstm(x)
 
-        features = nn.functional.relu(self.dense1(lstm_out))
+        # attended, _ = self.attention(lstm_out, lstm_out, lstm_out)
+
+        # residual connection
+        features = lstm_out # + attended
+
+        features = nn.functional.relu(self.dense1(features))
 
         # gaussian noise (only applied during training)
         if self.training and self.noise_std > 0:

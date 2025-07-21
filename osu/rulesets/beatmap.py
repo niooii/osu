@@ -98,6 +98,7 @@ class Beatmap:
         if 'timing_points' in self.sections:
             self.og_timing_points = list(map(timing_points.create, self.sections['timing_points']))
             self.timing_points = self.og_timing_points[:]
+
             del self.sections['timing_points']
 
         if 'hit_objects' in self.sections:
@@ -398,21 +399,30 @@ class Beatmap:
 
     def _timing(self, time):
         bpm = None
-        i = bsearch(self.timing_points, time, lambda tp: tp.offset)
-        timing_point = self.timing_points[i - 1]
-
-        for tp in self.timing_points[i:]:
-            if tp.offset > time:
-                break
-            if tp.bpm > 0:
-                bpm = tp.bpm
-            timing_point = tp
-
-        while i >= 0 and bpm is None:
-            i -= 1
-            if self.timing_points[i].bpm > 0:
-                bpm = self.timing_points[i].bpm
-
+        timing_point = None
+        
+        # Find the latest timing point with offset <= time
+        for tp in self.timing_points:
+            if tp.offset <= time:
+                timing_point = tp
+                if tp.bpm > 0:  # Base timing point
+                    bpm = tp.bpm
+            else:
+                break  # Timing points are sorted, so we can stop
+        
+        # If no timing point found, use first one
+        if timing_point is None:
+            timing_point = self.timing_points[0]
+            if timing_point.bpm > 0:
+                bpm = timing_point.bpm
+        
+        # If no base BPM found, search backwards for the last base timing point
+        if bpm is None:
+            for tp in reversed(self.timing_points):
+                if tp.offset <= time and tp.bpm > 0:
+                    bpm = tp.bpm
+                    break
+        
         return bpm or 120, timing_point
 
     def beat_duration(self, time):
