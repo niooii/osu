@@ -30,13 +30,11 @@ class Discriminator(nn.Module):
     def __init__(self, input_size):
         super(Discriminator, self).__init__()
         
-        # Input: beatmap features + cursor positions (x, y only)
+        # beatmap features + cursor positions (x, y only)
         combined_input_size = input_size + 2  # 2 for x, y position
         
-        # LSTM for processing sequences
         self.lstm = nn.LSTM(combined_input_size, 64, num_layers=2, batch_first=True, dropout=0.2)
         
-        # Dense layers for classification
         self.dense1 = nn.Linear(64, 32)
         self.dense2 = nn.Linear(32, 16)
         self.classifier = nn.Linear(16, 1)
@@ -75,6 +73,11 @@ class OsuReplayGAN:
         
         self.generator.to(self.device)
         self.discriminator.to(self.device)
+        
+        if hasattr(torch, 'compile'):
+            self.generator = torch.compile(self.generator)
+            self.discriminator = torch.compile(self.discriminator)
+            print("GAN models compiled..")
         
         self.gen_optimizer = optim.AdamW(self.generator.parameters(), lr=0.01, weight_decay=0.001)
         self.disc_optimizer = optim.AdamW(self.discriminator.parameters(), lr=0.005, weight_decay=0.001)
@@ -139,11 +142,13 @@ class OsuReplayGAN:
                 
                 # Real data
                 real_output = self.discriminator(batch_x, batch_y_pos)
+                real_output = torch.clamp(real_output, 1e-7, 1-1e-7)
                 real_loss = self.adversarial_loss(real_output, real_labels)
                 
                 # Fake data
                 fake_pos = self.generator(batch_x)
                 fake_output = self.discriminator(batch_x, fake_pos.detach())
+                fake_output = torch.clamp(fake_output, 1e-7, 1-1e-7)
                 fake_loss = self.adversarial_loss(fake_output, fake_labels)
                 
                 # Total discriminator loss
@@ -162,6 +167,7 @@ class OsuReplayGAN:
                 
                 # Adversarial loss (fool discriminator)
                 fake_output = self.discriminator(batch_x, fake_pos)
+                fake_output = torch.clamp(fake_output, 1e-7, 1-1e-7)
                 adv_loss = self.adversarial_loss(fake_output, real_labels)
                 
                 # Reconstruction loss

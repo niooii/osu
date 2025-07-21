@@ -3,6 +3,7 @@ import os
 import pickle
 import random
 import re
+from functools import lru_cache
 from glob import escape as glob_escape, glob
 
 import numpy as np
@@ -255,7 +256,14 @@ def _beatmap_frame(beatmap, time):
         if isinstance(obj, hitobjects.Slider):
             slider_duration = obj.duration(beat_duration, beatmap.slider_multiplier())
             if slider_duration > 0:
-                slider_speed = (obj.pixel_length / slider_duration) / 600.0
+                raw_speed = (obj.pixel_length / slider_duration)
+                # clamp to prevent inf
+                slider_speed = min(raw_speed, 10.0)
+                if slider_speed == 10:
+                    print("slider speed got clamped to 10..")
+                    print('raw speed value: ' + str(raw_speed))
+                    print('slider dur: ' + str(slider_duration))
+                    print('slider len: ' + str(obj.pixel_length))
             else:
                 slider_speed = DEFAULT_SLIDER_SPEED
         else:

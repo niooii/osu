@@ -22,6 +22,9 @@ class OsuKeyModel:
 
         self.key_model = KeyModel(self.input_size, noise_std)
         self.key_model.to(self.device)
+        
+        if hasattr(torch, 'compile'):
+            self.key_model = torch.compile(self.key_model)
 
         self.key_optimizer = optim.AdamW(self.key_model.parameters(), lr=0.01, weight_decay=0.001)
         self.key_criterion = nn.BCEWithLogitsLoss()

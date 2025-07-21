@@ -1362,6 +1362,7 @@ dependencies = [
     { name = "torchvision", version = "0.22.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux' and sys_platform != 'win32'" },
     { name = "torchvision", version = "0.22.1+cu118", source = { registry = "https://download.pytorch.org/whl/cu118" }, marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
     { name = "tqdm" },
+    { name = "triton-windows" },
 ]
 
 [package.metadata]
@@ -1390,6 +1391,7 @@ requires-dist = [
     { name = "torchvision", marker = "sys_platform != 'linux' and sys_platform != 'win32'", specifier = ">=0.22.0" },
     { name = "torchvision", marker = "sys_platform == 'linux' or sys_platform == 'win32'", specifier = ">=0.22.0", index = "https://download.pytorch.org/whl/cu118" },
     { name = "tqdm", specifier = ">=4.67.1" },
+    { name = "triton-windows", specifier = ">=3.3.1.post19" },
 ]
 
 [[package]]
@@ -4964,6 +4966,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/24/5f/950fb373bf9c01ad4eb5a8cd5eaf32cdf9e238c02f9293557a2129b9c4ac/triton-3.3.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:9999e83aba21e1a78c1f36f21bce621b77bcaa530277a50484a7cb4a822f6e43", size = 155669138, upload_time = "2025-05-29T23:39:51.771Z" },
     { url = "https://files.pythonhosted.org/packages/74/1f/dfb531f90a2d367d914adfee771babbd3f1a5b26c3f5fbc458dee21daa78/triton-3.3.1-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:b89d846b5a4198317fec27a5d3a609ea96b6d557ff44b56c23176546023c4240", size = 155673035, upload_time = "2025-05-29T23:40:02.468Z" },
     { url = "https://files.pythonhosted.org/packages/28/71/bd20ffcb7a64c753dc2463489a61bf69d531f308e390ad06390268c4ea04/triton-3.3.1-cp313-cp313t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:a3198adb9d78b77818a5388bff89fa72ff36f9da0bc689db2f0a651a67ce6a42", size = 155735832, upload_time = "2025-05-29T23:40:10.522Z" },
+]
+
+[[package]]
+name = "triton-windows"
+version = "3.3.1.post19"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "setuptools" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c6/c8/443ff6e9b5bdd1da6ebca5ea05343f27ccd04c91be5632d8e609523bcd85/triton_windows-3.3.1.post19-cp312-cp312-win_amd64.whl", hash = "sha256:ba04c251fb26f7a77ef18f7bed15221d14c24e60b66a023162a750517aedc216", size = 41915618, upload_time = "2025-05-30T15:12:31.032Z" },
+    { url = "https://files.pythonhosted.org/packages/e0/9b/778979b558f3fe541a42379bd8822c31075bc3e9cf53ed6e5688c7dbf972/triton_windows-3.3.1.post19-cp313-cp313-win_amd64.whl", hash = "sha256:743e538f989609e57f8f9ee6d1442e4d1035997366f81d6bc89e2debcdd37f9e", size = 41915222, upload_time = "2025-05-30T15:12:41.58Z" },
 ]
 
 [[package]]
