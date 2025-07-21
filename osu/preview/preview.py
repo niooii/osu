@@ -10,6 +10,7 @@ from osu.preview import beatmap as beatmap_preview
 from osu.rulesets import beatmap as bm
 from osu.rulesets import replay as replay_module
 from osu import dataset
+from osu.rulesets.mods import Mods
 
 
 def preview_replay_raw(ia_replay, beatmap_path: str, mods=None, audio_file=None):
@@ -158,7 +159,8 @@ def preview_replay_raw(ia_replay, beatmap_path: str, mods=None, audio_file=None)
 
             if len(visible_objects) > 0:
                 delta = visible_objects[0].time - time
-                ox, oy = visible_objects[0].target_position(time, beatmap.beat_duration(time), beatmap['SliderMultiplier'])
+                print(f'slider multiplier: {beatmap.slider_multiplier()}')
+                ox, oy = visible_objects[0].target_position(time, beatmap.beat_duration(time), beatmap.slider_multiplier())
 
                 if delta > 0:
                     cx += (ox - cx) / delta
@@ -260,15 +262,16 @@ def preview_replay(replay: replay_module.Replay, beatmap_path: str, audio_file=N
     beatmap = bm.load(beatmap_path)
     
     # Extract mods from replay
-    mods = []
+    mods = 0
     if replay.has_mods(replay_module.Mod.DT):
-        mods.append('dt')
+        print("HAS DT")
+        mods |= Mods.DOUBLE_TIME
     if replay.has_mods(replay_module.Mod.HR):
-        mods.append('hr')
+        mods |= Mods.HARD_ROCK
     if replay.has_mods(replay_module.Mod.EZ):
-        mods.append('ez')
+        mods |= Mods.EASY
     if replay.has_mods(replay_module.Mod.HT):
-        mods.append('ht')
+        mods |= Mods.HALF_TIME
 
     beatmap.apply_mods(mods)
 
@@ -278,8 +281,8 @@ def preview_replay(replay: replay_module.Replay, beatmap_path: str, audio_file=N
     ia_replay = []
     for chunk in replay_data:
         for frame in chunk:
-            x, y = frame[0], frame[1]
-            ia_replay.append([x, y])
+            x, y, k1, k2 = frame[0], frame[1], frame[2], frame[3]
+            ia_replay.append([x, y, k1, k2])
     
     ia_replay = np.array(ia_replay)
     

@@ -1,8 +1,10 @@
+import copy
 import math
 from datetime import time
 
 from . import core, hitobjects, timing_points
 from ._util.bsearch import bsearch
+from .hitobjects import HitCircle, Slider, Spinner
 from .mods import Mods
 
 import re
@@ -98,7 +100,9 @@ class Beatmap:
             del self.sections['timing_points']
 
         if 'hit_objects' in self.sections:
-            self.hit_objects = list(map(hitobjects.create, self.sections['hit_objects']))
+            self.og_hit_objects: list[HitCircle | Slider | Spinner] = list(map(hitobjects.create, self.sections['hit_objects']))
+            # create shallow copy
+            self.hit_objects: list[HitCircle | Slider | Spinner] = self.og_hit_objects[:]
             del self.sections['hit_objects']
 
     def combo_color(self, new_combo, combo_skip):
@@ -116,6 +120,20 @@ class Beatmap:
                 return section[key]
         return None
 
+    # applies the function f: (t, obj) -> (t * time_scale, obj)
+    def apply_time_scale(self, time_scale: float):
+        self.hit_objects.clear()
+        for obj in self.og_hit_objects:
+            new_obj = copy.deepcopy(obj)
+            new_obj.time *= time_scale
+            if isinstance(new_obj, Spinner):
+                new_obj.end_time *= time_scale
+            self.hit_objects.append(new_obj)
+
+        if self.mods & Mods.HARD_ROCK:
+            self._create_hr_hit_objects_cache()
+
+
     def apply_mods(self, mods: int):
         # Reset all mods first
         # self.dt = False
@@ -132,10 +150,10 @@ class Beatmap:
             raise ValueError("Tried to apply DT and HT.")
 
         if mods & Mods.HARD_ROCK and mods & Mods.EASY:
-            raise ValueError("Tried to apply HR and EZ. pick a strugle buddy")
+            raise ValueError("Tried to apply HR and EZ. pick a struggle buddy")
 
         if mods & Mods.DOUBLE_TIME:
-            # do something
+            self.apply_time_scale(2/3)
             pass
         if mods & Mods.HARD_ROCK:
             # need to create hr objects bc the game area is flipped on X axis
@@ -144,7 +162,7 @@ class Beatmap:
             # do something
             pass
         if mods & Mods.HALF_TIME:
-            # do something
+            self.apply_time_scale(4/3)
             pass
 
         self.mods = mods
@@ -184,14 +202,16 @@ class Beatmap:
         
         if ar <= 5:
             preempt = 1200 + 600 * (5 - ar) / 5
-            fade_in = 800 + 400 * (5 - ar) / 5
         else:
             preempt = 1200 - 750 * (ar - 5) / 5
-            fade_in = 800 - 500 * (ar - 5) / 5
-            
-        # TODO: DT/HT timing effects need proper implementation
-        # DT should make preempt/fade_in 33% shorter, HT 33% longer
-            
+
+        # DT makes preempt 33% shorter, HT 33% longer
+        if self.mods & Mods.HALF_TIME:
+            preempt *= 4/3.0
+        elif self.mods & Mods.DOUBLE_TIME:
+            preempt *= 2/3.0
+
+        fade_in = preempt * 2/3.0
         return preempt, fade_in
 
     def base_circle_size(self):
@@ -336,10 +356,22 @@ class Beatmap:
         return self['ApproachRate']
 
     def slider_multiplier(self):
-        return self['SliderMultiplier']
+        mult = 1
+        if self.mods & Mods.DOUBLE_TIME:
+            mult = 1.5
+        elif self.mods & Mods.HALF_TIME:
+            mult = 2/3.0
+
+        return self['SliderMultiplier'] * mult
 
     def slider_tick_rate(self):
-        return self['SliderTickRate']
+        mult = 1
+        # if self.mods & Mods.DOUBLE_TIME:
+        #     mult = 1.5
+        # elif self.mods & Mods.HALF_TIME:
+        #     mult = 2 / 3.0
+
+        return self['SliderTickRate'] * mult
 
     def base_start_offset(self):
         """Start offset using base approach rate for timing synchronization"""
@@ -355,7 +387,7 @@ class Beatmap:
             return 0
         last_obj = self.effective_hit_objects[-1]
         beat_duration = self.beat_duration(last_obj.time)
-        return int(last_obj.time + last_obj.duration(beat_duration, self['SliderMultiplier']))
+        return int(last_obj.time + last_obj.duration(beat_duration, self.slider_multiplier()))
 
     def _timing(self, time):
         bpm = None
@@ -381,14 +413,21 @@ class Beatmap:
         beat_duration = timing_point.bpm
         if beat_duration < 0:
             return bpm * -beat_duration / 100
-        return beat_duration
+
+        mult = 1
+        if self.mods & Mods.DOUBLE_TIME:
+            mult = 2 / 3.0
+        elif self.mods & Mods.HALF_TIME:
+            mult = 1.5
+
+        return beat_duration * mult
 
     def visible_objects(self, time, count=None):
         objects = []
         preempt, _ = self.approach_rate()
 
         i = bsearch(self.effective_hit_objects, time, lambda obj: obj.time + preempt - obj.duration(self.beat_duration(obj.time),
-                                                                                          self['SliderMultiplier']))
+                                                                                          self.slider_multiplier()))
         i -= 5
         if i < 0:
             i = 0
@@ -396,7 +435,7 @@ class Beatmap:
         n = 0
 
         for obj in self.effective_hit_objects[i:]:
-            obj_duration = obj.duration(self.beat_duration(obj.time), self['SliderMultiplier'])
+            obj_duration = obj.duration(self.beat_duration(obj.time), self.slider_multiplier())
 
             if time > obj.time + obj_duration:
                 continue

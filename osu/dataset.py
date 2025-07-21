@@ -146,7 +146,7 @@ def replay_to_output_data(beatmap: osu_beatmap.Beatmap, replay: osu_replay.Repla
     for time in range(beatmap.start_offset(), beatmap.length(), FRAME_RATE):
         x, y, k1, k2 = _replay_frame(beatmap, replay, time)
 
-        chunk.append(np.array([x - 0.5, y - 0.5]))
+        chunk.append(np.array([x - 0.5, y - 0.5, k1, k2]))
 
         if len(chunk) == BATCH_LENGTH:
             target_data.append(chunk)
@@ -238,7 +238,7 @@ def _beatmap_frame(beatmap, time):
     if len(visible_objects) > 0:
         obj = visible_objects[0]
         beat_duration = beatmap.beat_duration(obj.time)
-        px, py = obj.target_position(time, beat_duration, beatmap['SliderMultiplier'])
+        px, py = obj.target_position(time, beat_duration, beatmap.slider_multiplier())
         time_left = obj.time - time
         preempt, _ = beatmap.approach_rate()
         is_slider = int(isinstance(obj, hitobjects.Slider))

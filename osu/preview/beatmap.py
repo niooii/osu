@@ -47,7 +47,7 @@ class Beatmap:
                 COLOR_PALLETE[color_index],
                 circle_radius,
                 beat_duration,
-                self.beatmap['SliderMultiplier']
+                self.beatmap.slider_multiplier()
             )
 
 def from_beatmap(beatmap):
