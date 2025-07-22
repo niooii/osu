@@ -49,6 +49,9 @@ class PrecomputedBeatmapData:
         # Pre-compute timing data for all unique object times
         self.timing_cache = self._precompute_timing_data()
         
+        # Build optimized lookup structures for fast object finding
+        self._build_time_indexed_lookups()
+        
         # Build time-indexed frame data (the key optimization)
         self.frame_cache = self._precompute_all_frames()
     
@@ -64,6 +67,7 @@ class PrecomputedBeatmapData:
                 'type': type(obj).__name__,
                 'is_slider': isinstance(obj, hitobjects.Slider),
                 'is_spinner': isinstance(obj, hitobjects.Spinner),
+                'obj_ref': obj,  # Cache object reference to avoid linear searches
             }
             
             # Pre-compute slider-specific data
@@ -94,6 +98,8 @@ class PrecomputedBeatmapData:
                     obj_data['precomputed_slider_speed'] = slider_speed
                     raw_len = obj_data['pixel_length'] / 600.0
                     obj_data['precomputed_slider_len'] = raw_len
+                    # Cache the duration to avoid 200M+ recalculations
+                    obj_data['precomputed_duration'] = slider_duration
 
             objects_data.append(obj_data)
         
@@ -108,6 +114,27 @@ class PrecomputedBeatmapData:
             timing_cache[obj_time] = self.beatmap.beat_duration(obj_time)
         
         return timing_cache
+    
+    def _build_time_indexed_lookups(self):
+        import bisect
+        
+        # Separate sliders and regular objects, sort by time
+        self.slider_intervals = []  # (start_time, end_time, obj_data)
+        self.sorted_objects = []    # (time, obj_data) sorted by time
+        
+        for obj_data in self.hit_objects_data:
+            if obj_data['is_slider'] and obj_data.get('precomputed_duration'):
+                # Build slider intervals for active slider lookup
+                start_time = obj_data['time']
+                end_time = start_time + obj_data['precomputed_duration']
+                self.slider_intervals.append((start_time, end_time, obj_data))
+            
+            # Add all objects to sorted list for upcoming object lookup
+            self.sorted_objects.append((obj_data['time'], obj_data))
+        
+        # Sort for binary search
+        self.slider_intervals.sort(key=lambda x: x[0])  # Sort by start time
+        self.sorted_objects.sort(key=lambda x: x[0])    # Sort by time
     
     def _precompute_all_frames(self):
         """Pre-compute frame data for all time points"""
@@ -124,32 +151,28 @@ class PrecomputedBeatmapData:
             if visible_objects:
                 # Use first visible object (same logic as original)
                 obj_data = visible_objects[0]
-                obj = obj_data.get('slider_obj') or self._get_object_by_data(obj_data)
+                obj = obj_data.get('slider_obj') or obj_data.get('obj_ref')
                 
                 # Get cached timing data
                 beat_duration = self.timing_cache[obj_data['time']]
                 
-                # Calculate position (this still needs to be done per-frame for sliders)
+                # Calculate position (if slider otherwise we haev it cached kinda)
                 px, py = obj.target_position(time, beat_duration, self.slider_multiplier)
                 time_left = obj_data['time'] - time
 
                 if obj_data['is_slider']:
-                    slider_speed = obj_data['precomputed_slider_speed']
-                    slider_len = obj_data['precomputed_slider_len']
+                    slider_speed = obj_data.get('precomputed_slider_speed', DEFAULT_SLIDER_SPEED)
+                    slider_len = obj_data.get('precomputed_slider_len', DEFAULT_SLIDER_LEN)
                 else:
                     slider_speed = DEFAULT_SLIDER_SPEED
                     slider_len = DEFAULT_SLIDER_LEN
                 
-                # Store pre-computed frame data
-                frame_cache[time] = {
-                    'px': px, 'py': py,
-                    'time_left': time_left,
-                    'is_slider': int(obj_data['is_slider']),
-                    'is_spinner': int(obj_data['is_spinner']),
-                    'circle_size': self.circle_size,
-                    'slider_speed': slider_speed,
-                    'slider_len': slider_len
-                }
+                # Store pre-computed frame data as tuple for memory efficiency
+                frame_cache[time] = (
+                    px, py, time_left,
+                    int(obj_data['is_slider']), int(obj_data['is_spinner']),
+                    self.circle_size, slider_speed, slider_len
+                )
             else:
                 frame_cache[time] = None
         
@@ -157,42 +180,41 @@ class PrecomputedBeatmapData:
     
     def _find_visible_objects_at_time(self, time):
         """Find active objects at given time - prioritizes currently playing sliders"""
-        # First, check for active sliders (currently being played)
+        import bisect
+        
+        # check for active sliders using binary search
         active_sliders = []
         
-        for obj_data in self.hit_objects_data:
-            if obj_data['is_slider']:
-                # Calculate slider duration
-                beat_duration = self.timing_cache[obj_data['time']]
-                slider_obj = obj_data.get('slider_obj')
-                if slider_obj:
-                    duration = slider_obj.duration(beat_duration, self.slider_multiplier)
-                    # Check if slider is currently active
-                    if obj_data['time'] <= time <= obj_data['time'] + duration:
-                        active_sliders.append(obj_data)
+        # Binary search for sliders that could be active at this time
+        left_idx = bisect.bisect_right([interval[0] for interval in self.slider_intervals], time)
+        
+        # Check sliders that start before or at current time
+        for i in range(left_idx):
+            start_time, end_time, obj_data = self.slider_intervals[i]
+            if start_time <= time <= end_time:
+                active_sliders.append(obj_data)
         
         if active_sliders:
-            # Sort by start time and return the first active slider
+            # Sort by start time and return the first active slider (preserves original logic)
             active_sliders.sort(key=lambda x: x['time'])
             return active_sliders[:1]
         
-        # If no active sliders, fall back to visibility logic for upcoming objects
+        # if no active sliders, find upcoming visible objects using binary search
         visible = []
-        for obj_data in self.hit_objects_data:
-            # Simple visibility check - can be optimized further with spatial indexing
-            if obj_data['time'] >= time and obj_data['time'] <= time + self.preempt:
-                visible.append(obj_data)
+        time_end = time + self.preempt
         
-        # Sort by time (same as original visible_objects behavior)
+        # binary search for objects in time range [time, time + preempt]
+        left_idx = bisect.bisect_left([obj[0] for obj in self.sorted_objects], time)
+        right_idx = bisect.bisect_right([obj[0] for obj in self.sorted_objects], time_end)
+        
+        # collect objects in time range
+        for i in range(left_idx, right_idx):
+            obj_time, obj_data = self.sorted_objects[i]
+            visible.append(obj_data)
+        
         visible.sort(key=lambda x: x['time'])
         return visible[:1]  # Return first object (same as count=1)
     
-    def _get_object_by_data(self, obj_data):
-        """Get original object reference by data - fallback for non-slider objects"""
-        for obj in self.beatmap.effective_hit_objects:
-            if obj.time == obj_data['time']:
-                return obj
-        return None
     
     def get_frame_data(self, time):
         """Get pre-computed frame data - O(1) lookup instead of O(n) calculation"""
@@ -422,15 +444,18 @@ except:
 #         return None
 
 
+# Pre-cache enum values to avoid repeated enum access
+_K1_M1_MASK = Keys.K1 | Keys.M1
+_K2_M2_MASK = Keys.K2 | Keys.M2
+
 def _replay_frame(beatmap, replay, time):
     x, y, keys = replay.frame(time)
 
-    k1, k2 = False, False
-    if keys & Keys.K1 or keys & Keys.M1:
-        k1 = True
-    if keys & Keys.K2 or keys & Keys.M2:
-        k2 = True
+    # Optimize enum operations - use pre-cached masks
+    k1 = bool(keys & _K1_M1_MASK)
+    k2 = bool(keys & _K2_M2_MASK)
 
+    # Normalize coordinates
     x = max(0, min(x / osu_core.SCREEN_WIDTH, 1))
     y = max(0, min(y / osu_core.SCREEN_HEIGHT, 1))
     return x, y, k1, k2
@@ -458,19 +483,22 @@ def get_beatmap_time_data(beatmap: osu_beatmap.Beatmap) -> []:
                 frame = list(last_ok_frame)
                 frame[2] = MAX_TIME_UNTIL_CLICK
         else:
-            # Convert precomputed data back to original format
-            px = max(0, min(frame_data['px'] / osu_core.SCREEN_WIDTH, 1))
-            py = max(0, min(frame_data['py'] / osu_core.SCREEN_HEIGHT, 1))
-            time_until_click = max(0, min(frame_data['time_left'] / 1000, MAX_TIME_UNTIL_CLICK))
+            # Unpack precomputed tuple data for faster access
+            px_raw, py_raw, time_left, is_slider, is_spinner, circle_size, slider_speed, slider_len = frame_data
+            
+            # Convert to normalized coordinates
+            px = max(0, min(px_raw / osu_core.SCREEN_WIDTH, 1))
+            py = max(0, min(py_raw / osu_core.SCREEN_HEIGHT, 1))
+            time_until_click = max(0, min(time_left / 1000, MAX_TIME_UNTIL_CLICK))
             
             frame = (
                 px, py,
                 time_until_click,
-                frame_data['is_slider'],
-                frame_data['is_spinner'],
-                frame_data['circle_size'],
-                frame_data['slider_speed'],
-                frame_data['slider_len']
+                is_slider,
+                is_spinner,
+                circle_size,
+                slider_speed,
+                slider_len
             )
             last_ok_frame = frame
 
