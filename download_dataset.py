@@ -16,6 +16,7 @@ import osu.dataset as dataset
 import osu.preview.preview as preview
 
 import osu.downloader as downloader
+
 #
 # download only S ranks from top 50 on each map
 # mapsets = [
@@ -37,10 +38,13 @@ import osu.downloader as downloader
 # ]
 
 mapsets = downloader.get_all_mapset_folders_on_disk()
+
+
 def filter_beatmap(beatmap: bm.Beatmap) -> bool:
     if beatmap.ar_raw() <= 9:
         return False
 
     return True
+
 
 downloader.download_mapsets(mapsets, filter=filter_beatmap, max=25, only='S')

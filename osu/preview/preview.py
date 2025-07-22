@@ -20,7 +20,7 @@ def preview_replay_raw(ia_replay, beatmap_path: str, mods=None, audio_file=None)
     Args:
         ia_replay: numpy array of replay data
         beatmap: loaded beatmap object (will be copied to avoid modification)
-        mods: list of mod strings to apply (e.g., ['dt', 'hr']) (optional)
+        mods: bitflag of mods to apply (e.g., Mods.DOUBLE_TIME | Mods.HARD_ROCK) (optional)
         audio_file: path to audio file (optional)
     """
     

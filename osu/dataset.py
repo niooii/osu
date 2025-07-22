@@ -1,15 +1,10 @@
-import math
 import os
 import pickle
 import random
 import re
-from glob import escape as glob_escape, glob
 
 import numpy as np
 import pandas as pd
-import torch
-from torch.nn.utils.rnn import pad_sequence
-import tqdm
 
 import osu.rulesets.beatmap as osu_beatmap
 import osu.rulesets.core as osu_core
@@ -220,58 +215,80 @@ _DEFAULT_BEATMAP_FRAME = (
 def pt_pad_sequences(data, maxlen, value=_DEFAULT_BEATMAP_FRAME):
     if not data:
         return np.array([])
+    
+    # Convert each sequence to numpy array (equivalent to torch.tensor step)
+    arrays = []
+    for seq in data:
+        if seq:  # non-empty sequence
+            arrays.append(np.stack(seq).astype(np.float32))
+        else:  # empty sequence
+            # Determine feature dimension from other sequences
+            feature_dim = None
+            for other_seq in data:
+                if other_seq:
+                    feature_dim = len(other_seq[0])
+                    break
+            if feature_dim is None:
+                # All sequences empty - use value to determine feature dim
+                feature_dim = len(value) if hasattr(value, '__len__') else 8
+            arrays.append(np.empty((0, feature_dim), dtype=np.float32))
+    
+    if not arrays:
+        return np.array([])
+    
+    # Get dimensions
+    max_seq_len = max(arr.shape[0] for arr in arrays)
+    num_features = arrays[0].shape[1]
+    batch_size = len(arrays)
+    
+    # Step 1: Equivalent to pad_sequence - pad all sequences to max_seq_len
+    padded = np.full((batch_size, max_seq_len, num_features), value, dtype=np.float32)
+    for i, arr in enumerate(arrays):
+        if arr.shape[0] > 0:
+            padded[i, :arr.shape[0]] = arr
+    
+    # Step 2: Trim or pad to exact maxlen (equivalent to torch.nn.functional.pad)
+    if max_seq_len > maxlen:
+        # Trim to maxlen
+        result = padded[:, :maxlen]
+    elif max_seq_len < maxlen:
+        # Pad to maxlen 
+        extra_frames = maxlen - max_seq_len
+        extra_padding = np.full((batch_size, extra_frames, num_features), value, dtype=np.float32)
+        result = np.concatenate([padded, extra_padding], axis=1)
+    else:
+        result = padded
+    
+    return result
 
-    # Convert to list of tensors
-    tensor_list = [torch.tensor(seq, dtype=torch.float) for seq in data]
-    # print(f'tensor list len: {len(tensor_list)}')
-    # print(f'tensor list (first element) shape: {tensor_list[0].shape}')
 
-    # Pad sequences
-    padded = pad_sequence(tensor_list, batch_first=True, padding_value=value)
-
-    # Trim or pad to exact maxlen
-    if padded.size(1) > maxlen:
-        padded = padded[:, :maxlen]
-    elif padded.size(1) < maxlen:
-        pad = maxlen - padded.size(1)
-        # print(f'erm padding by {pad}?')
-        padding_tuple = (0, 0, 0, pad)
-        # print(f'padding tuple: {padding_tuple}')
-        padded = torch.nn.functional.pad(padded, padding_tuple, value=value)
-
-    # print(f'padded tensor list len: {len(padded)}')
-    # print(f'padded tensor list (first element) shape: {padded[0].shape}')
-
-    return padded.numpy()
-
-
-def all_files(osu_path, limit=0, verbose=False):
-    """Return a pandas DataFrame mapping replay files to beatmap files"""
-
-    replays = _list_all_replays(osu_path)
-    if limit > 0:
-        replays = replays[:limit]
-
-    beatmaps = []
-    for i in tqdm.tqdm(range(len(replays) - 1, -1, -1), disable=not verbose):
-
-        beatmap = _get_replay_beatmap_file(osu_path, replays[i])
-
-        if beatmap is None:
-            replays.pop(i)
-        else:
-            beatmaps.insert(0, beatmap)
-
-    global _beatmap_cache
-    with open('../.data/beatmap_cache.dat', 'wb') as f:
-        pickle.dump(_beatmap_cache, f)
-
-    if verbose:
-        print()
-        print()
-
-    files = list(zip(replays, beatmaps))
-    return pd.DataFrame(files, columns=['replay', 'beatmap'])
+# def all_files(osu_path, limit=0, verbose=False):
+#     """Return a pandas DataFrame mapping replay files to beatmap files"""
+#
+#     replays = _list_all_replays(osu_path)
+#     if limit > 0:
+#         replays = replays[:limit]
+#
+#     beatmaps = []
+#     for i in tqdm.tqdm(range(len(replays) - 1, -1, -1), disable=not verbose):
+#
+#         beatmap = _get_replay_beatmap_file(osu_path, replays[i])
+#
+#         if beatmap is None:
+#             replays.pop(i)
+#         else:
+#             beatmaps.insert(0, beatmap)
+#
+#     global _beatmap_cache
+#     with open('../.data/beatmap_cache.dat', 'wb') as f:
+#         pickle.dump(_beatmap_cache, f)
+#
+#     if verbose:
+#         print()
+#         print()
+#
+#     files = list(zip(replays, beatmaps))
+#     return pd.DataFrame(files, columns=['replay', 'beatmap'])
 
 
 def load(files, verbose=0) -> pd.DataFrame:
@@ -364,11 +381,11 @@ def target_data(dataset: pd.DataFrame, verbose=False):
                         dtype=np.float32)
 
 
-def _list_all_replays(osu_path):
-    # Returns the full list of *.osr replays available for a given
-    # osu! installation
-    pattern = os.path.join(osu_path, "Replays", "*.osr")
-    return glob(pattern)
+# def _list_all_replays(osu_path):
+#     # Returns the full list of *.osr replays available for a given
+#     # osu! installation
+#     pattern = os.path.join(osu_path, "Replays", "*.osr")
+#     return glob(pattern)
 
 
 # Beatmap caching. This reduces beatmap search time a LOT.
@@ -382,27 +399,27 @@ except:
     _beatmap_cache = {}
 
 
-def _get_replay_beatmap_file(osu_path, replay_file):
-    global _beatmap_cache
-
-    m = re.search(r"[^\\/]+ \- (.+ \- .+) \[(.+)\] \(.+\)", replay_file)
-    if m is None:
-        return None
-    beatmap, diff = m[1], m[2]
-
-    beatmap_file_pattern = "*" + glob_escape(beatmap) + "*" + glob_escape("[" + diff + "]") + ".osu"
-    if beatmap_file_pattern in _beatmap_cache:
-        return _beatmap_cache[beatmap_file_pattern]
-
-    pattern = os.path.join(osu_path, "Songs", "**", beatmap_file_pattern)
-    file_matches = glob(pattern)
-
-    if len(file_matches) > 0:
-        _beatmap_cache[beatmap_file_pattern] = file_matches[0]
-        return file_matches[0]
-    else:
-        _beatmap_cache[beatmap_file_pattern] = None
-        return None
+# def _get_replay_beatmap_file(osu_path, replay_file):
+#     global _beatmap_cache
+#
+#     m = re.search(r"[^\\/]+ \- (.+ \- .+) \[(.+)\] \(.+\)", replay_file)
+#     if m is None:
+#         return None
+#     beatmap, diff = m[1], m[2]
+#
+#     beatmap_file_pattern = "*" + glob_escape(beatmap) + "*" + glob_escape("[" + diff + "]") + ".osu"
+#     if beatmap_file_pattern in _beatmap_cache:
+#         return _beatmap_cache[beatmap_file_pattern]
+#
+#     pattern = os.path.join(osu_path, "Songs", "**", beatmap_file_pattern)
+#     file_matches = glob(pattern)
+#
+#     if len(file_matches) > 0:
+#         _beatmap_cache[beatmap_file_pattern] = file_matches[0]
+#         return file_matches[0]
+#     else:
+#         _beatmap_cache[beatmap_file_pattern] = None
+#         return None
 
 
 def _replay_frame(beatmap, replay, time):
