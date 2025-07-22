@@ -3,7 +3,6 @@ import os
 import pickle
 import random
 import re
-from functools import lru_cache
 from glob import escape as glob_escape, glob
 
 import numpy as np
@@ -29,7 +28,7 @@ INPUT_FEATURES = [
     'is_slider', # bool
     'is_spinner', # bool
     'cs', # normalized from 0-1 (cs value / 10)
-    'slider_speed', # (slider pixel len / duration) / 600
+    'slider_speed', # (slider pixel len / duration)
     'slider_len' # osu pixel len / 600
 ]
 
@@ -37,6 +36,172 @@ MAX_TIME_UNTIL_CLICK = 2.0
 DEFAULT_CS = 0.4
 DEFAULT_SLIDER_LEN = 0
 DEFAULT_SLIDER_SPEED = 0
+
+class PrecomputedBeatmapData:
+    """Pre-compute all expensive beatmap calculations once for massive speedup"""
+    
+    def __init__(self, beatmap: osu_beatmap.Beatmap):
+        self.beatmap = beatmap
+        
+        # Pre-compute static properties (calculated once)
+        self.preempt, _ = beatmap.approach_rate()
+        self.circle_size = beatmap.circle_size() / 10.0
+        self.slider_multiplier = beatmap.slider_multiplier()
+        
+        # Pre-compute all hit object data
+        self.hit_objects_data = self._precompute_hit_objects()
+        
+        # Pre-compute timing data for all unique object times
+        self.timing_cache = self._precompute_timing_data()
+        
+        # Build time-indexed frame data (the key optimization)
+        self.frame_cache = self._precompute_all_frames()
+    
+    def _precompute_hit_objects(self):
+        """Extract and pre-process all hit object data"""
+        objects_data = []
+        
+        for obj in self.beatmap.effective_hit_objects:
+            obj_data = {
+                'time': obj.time,
+                'x': obj.x,
+                'y': obj.y,
+                'type': type(obj).__name__,
+                'is_slider': isinstance(obj, hitobjects.Slider),
+                'is_spinner': isinstance(obj, hitobjects.Spinner),
+            }
+            
+            # Pre-compute slider-specific data
+            if obj_data['is_slider']:
+                obj_data['pixel_length'] = obj.pixel_length
+                obj_data['slider_obj'] = obj
+                
+                # Check if slider is too short - decide once per object
+                beat_duration = self.beatmap.beat_duration(obj.time)
+                slider_duration = obj.duration(beat_duration, self.slider_multiplier)
+                
+                # if its below 0.05 its probably some aspire map
+                # with like infinite bpm so treat it like a regular note
+                if slider_duration < 0.05:
+                    obj_data['is_slider'] = False
+                else:
+                    raw_speed = (obj_data['pixel_length'] / slider_duration)
+                    slider_speed = min(raw_speed, 10.0)
+                    if slider_speed == 10.0:
+                        # NO human is following this. just treat it like a regular note lol
+                        # well actually nah not yet
+                        print("slider speed got clamped to 10.. odd...")
+                        print(f'{self.beatmap.title()} [{self.beatmap.version()}]')
+                        print('raw speed value: ' + str(raw_speed))
+                        print('slider dur: ' + str(slider_duration))
+                        print('slider len: ' + str(obj_data['pixel_length']))
+                    
+                    obj_data['precomputed_slider_speed'] = slider_speed
+                    raw_len = obj_data['pixel_length'] / 600.0
+                    obj_data['precomputed_slider_len'] = raw_len
+
+            objects_data.append(obj_data)
+        
+        return objects_data
+    
+    def _precompute_timing_data(self):
+        """Pre-compute beat duration for all unique object times"""
+        timing_cache = {}
+        unique_times = set(obj['time'] for obj in self.hit_objects_data)
+        
+        for obj_time in unique_times:
+            timing_cache[obj_time] = self.beatmap.beat_duration(obj_time)
+        
+        return timing_cache
+    
+    def _precompute_all_frames(self):
+        """Pre-compute frame data for all time points"""
+        frame_cache = {}
+        
+        start_time = self.beatmap.start_offset()
+        end_time = self.beatmap.length()
+        
+        # Pre-compute visible objects for each time point
+        for time in range(start_time, end_time, FRAME_RATE):
+            # Find visible objects at this time (done once, not per frame)
+            visible_objects = self._find_visible_objects_at_time(time)
+            
+            if visible_objects:
+                # Use first visible object (same logic as original)
+                obj_data = visible_objects[0]
+                obj = obj_data.get('slider_obj') or self._get_object_by_data(obj_data)
+                
+                # Get cached timing data
+                beat_duration = self.timing_cache[obj_data['time']]
+                
+                # Calculate position (this still needs to be done per-frame for sliders)
+                px, py = obj.target_position(time, beat_duration, self.slider_multiplier)
+                time_left = obj_data['time'] - time
+
+                if obj_data['is_slider']:
+                    slider_speed = obj_data['precomputed_slider_speed']
+                    slider_len = obj_data['precomputed_slider_len']
+                else:
+                    slider_speed = DEFAULT_SLIDER_SPEED
+                    slider_len = DEFAULT_SLIDER_LEN
+                
+                # Store pre-computed frame data
+                frame_cache[time] = {
+                    'px': px, 'py': py,
+                    'time_left': time_left,
+                    'is_slider': int(obj_data['is_slider']),
+                    'is_spinner': int(obj_data['is_spinner']),
+                    'circle_size': self.circle_size,
+                    'slider_speed': slider_speed,
+                    'slider_len': slider_len
+                }
+            else:
+                frame_cache[time] = None
+        
+        return frame_cache
+    
+    def _find_visible_objects_at_time(self, time):
+        """Find active objects at given time - prioritizes currently playing sliders"""
+        # First, check for active sliders (currently being played)
+        active_sliders = []
+        
+        for obj_data in self.hit_objects_data:
+            if obj_data['is_slider']:
+                # Calculate slider duration
+                beat_duration = self.timing_cache[obj_data['time']]
+                slider_obj = obj_data.get('slider_obj')
+                if slider_obj:
+                    duration = slider_obj.duration(beat_duration, self.slider_multiplier)
+                    # Check if slider is currently active
+                    if obj_data['time'] <= time <= obj_data['time'] + duration:
+                        active_sliders.append(obj_data)
+        
+        if active_sliders:
+            # Sort by start time and return the first active slider
+            active_sliders.sort(key=lambda x: x['time'])
+            return active_sliders[:1]
+        
+        # If no active sliders, fall back to visibility logic for upcoming objects
+        visible = []
+        for obj_data in self.hit_objects_data:
+            # Simple visibility check - can be optimized further with spatial indexing
+            if obj_data['time'] >= time and obj_data['time'] <= time + self.preempt:
+                visible.append(obj_data)
+        
+        # Sort by time (same as original visible_objects behavior)
+        visible.sort(key=lambda x: x['time'])
+        return visible[:1]  # Return first object (same as count=1)
+    
+    def _get_object_by_data(self, obj_data):
+        """Get original object reference by data - fallback for non-slider objects"""
+        for obj in self.beatmap.effective_hit_objects:
+            if obj.time == obj_data['time']:
+                return obj
+        return None
+    
+    def get_frame_data(self, time):
+        """Get pre-computed frame data - O(1) lookup instead of O(n) calculation"""
+        return self.frame_cache.get(time)
 
 # k1 and k2 are the key presses (z, x). no mouse buttons because
 # who really uses mouse buttons tbh, dataset will convert
@@ -47,7 +212,8 @@ OUTPUT_FEATURES = ['x', 'y', 'k1', 'k2']
 _DEFAULT_BEATMAP_FRAME = (
     osu_core.SCREEN_WIDTH / 2, osu_core.SCREEN_HEIGHT / 2,  # x, y
     MAX_TIME_UNTIL_CLICK, False, False,  # time_until_click (seconds), is_slider, is_spinner
-    DEFAULT_CS, DEFAULT_SLIDER_SPEED, DEFAULT_SLIDER_LEN
+    DEFAULT_CS, DEFAULT_SLIDER_SPEED,
+    DEFAULT_SLIDER_LEN
 )
 
 
@@ -239,58 +405,6 @@ def _get_replay_beatmap_file(osu_path, replay_file):
         return None
 
 
-def _beatmap_frame(beatmap, time):
-    visible_objects = beatmap.visible_objects(time, count=1)
-
-    if len(visible_objects) > 0:
-        obj = visible_objects[0]
-        beat_duration = beatmap.beat_duration(obj.time)
-        px, py = obj.target_position(time, beat_duration, beatmap.slider_multiplier())
-        time_left = obj.time - time
-        preempt, _ = beatmap.approach_rate()
-        is_slider = int(isinstance(obj, hitobjects.Slider))
-        is_spinner = int(isinstance(obj, hitobjects.Spinner))
-        circle_size = beatmap.circle_size() / 10.0
-        
-        # calculate slider speed (px per second)
-        if isinstance(obj, hitobjects.Slider):
-            slider_duration = obj.duration(beat_duration, beatmap.slider_multiplier())
-            if slider_duration > 0:
-                raw_speed = (obj.pixel_length / slider_duration)
-                # clamp to prevent inf
-                slider_speed = min(raw_speed, 10.0)
-                if slider_speed == 10:
-                    print("slider speed got clamped to 10..")
-                    print('raw speed value: ' + str(raw_speed))
-                    print('slider dur: ' + str(slider_duration))
-                    print('slider len: ' + str(obj.pixel_length))
-            else:
-                slider_speed = DEFAULT_SLIDER_SPEED
-        else:
-            slider_speed = DEFAULT_SLIDER_SPEED
-            
-        # calculate slider length
-        if isinstance(obj, hitobjects.Slider):
-            slider_len = obj.pixel_length / 600.0
-        else:
-            slider_len = DEFAULT_SLIDER_LEN
-    else:
-        return None
-
-    px = max(0, min(px / osu_core.SCREEN_WIDTH, 1))
-    py = max(0, min(py / osu_core.SCREEN_HEIGHT, 1))
-
-    return (
-        px, py,
-        max(0, min(time_left / 1000, MAX_TIME_UNTIL_CLICK)),
-        is_slider,
-        is_spinner,
-        circle_size,
-        slider_speed,
-        slider_len
-    )
-
-
 def _replay_frame(beatmap, replay, time):
     x, y, keys = replay.frame(time)
 
@@ -306,27 +420,41 @@ def _replay_frame(beatmap, replay, time):
 
 
 def get_beatmap_time_data(beatmap: osu_beatmap.Beatmap) -> []:
-    # Removed memoization to ensure one-to-one correspondence with target_data
-    # Each (beatmap, replay) pair must generate its own chunks for proper alignment
-    
     if len(beatmap.effective_hit_objects) == 0:
         return None
 
+    # Create precomputed beatmap data
+    precomputed = PrecomputedBeatmapData(beatmap)
+    
     data = []
     chunk = []
-    preempt, _ = beatmap.approach_rate()
     last_ok_frame = None
 
     for time in range(beatmap.start_offset(), beatmap.length(), FRAME_RATE):
-        frame = _beatmap_frame(beatmap, time)
+        # O(1) lookup
+        frame_data = precomputed.get_frame_data(time)
 
-        if frame is None:
+        if frame_data is None:
             if last_ok_frame is None:
                 frame = _DEFAULT_BEATMAP_FRAME
             else:
                 frame = list(last_ok_frame)
                 frame[2] = MAX_TIME_UNTIL_CLICK
         else:
+            # Convert precomputed data back to original format
+            px = max(0, min(frame_data['px'] / osu_core.SCREEN_WIDTH, 1))
+            py = max(0, min(frame_data['py'] / osu_core.SCREEN_HEIGHT, 1))
+            time_until_click = max(0, min(frame_data['time_left'] / 1000, MAX_TIME_UNTIL_CLICK))
+            
+            frame = (
+                px, py,
+                time_until_click,
+                frame_data['is_slider'],
+                frame_data['is_spinner'],
+                frame_data['circle_size'],
+                frame_data['slider_speed'],
+                frame_data['slider_len']
+            )
             last_ok_frame = frame
 
         px, py, time_until_click, is_slider, is_spinner, circle_size, slider_speed, slider_len = frame

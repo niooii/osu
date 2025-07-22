@@ -134,47 +134,80 @@ def _compute_perfect_circle_curve(points, num_points=50):
 		angle2 = math.atan2(p2[1] - center[1], p2[0] - center[0])
 		angle3 = math.atan2(p3[1] - center[1], p3[0] - center[0])
 		
-		# from angle1 to angle2 to angle3
-		curve_points = []
-		segments = [(angle1, angle2), (angle2, angle3)]
+		# Determine the correct arc direction from angle1 to angle3 that passes through angle2
+		# We need to find which direction (clockwise or counterclockwise) from angle1 to angle3
+		# naturally passes through angle2
 		
-		# Calculate arc lengths for proportional point distribution
-		arc_lengths = []
-		total_arc_length = 0
+		# Normalize angles to [0, 2π] for easier calculations
+		def normalize_angle(angle):
+			while angle < 0:
+				angle += 2 * math.pi
+			while angle >= 2 * math.pi:
+				angle -= 2 * math.pi
+			return angle
 		
-		for start_angle, end_angle in segments:
-			# Calculate the shorter arc between these two angles
-			angle_diff = end_angle - start_angle
-			if angle_diff > math.pi:
-				angle_diff -= 2 * math.pi
-			elif angle_diff < -math.pi:
-				angle_diff += 2 * math.pi
+		angle1_norm = normalize_angle(angle1)
+		angle2_norm = normalize_angle(angle2)
+		angle3_norm = normalize_angle(angle3)
+		
+		# Check if angle2 lies on the arc from angle1 to angle3 (counterclockwise)
+		def angle_between_ccw(start, middle, end):
+			# Check if middle angle is between start and end when going counterclockwise
+			if start <= end:
+				return start <= middle <= end
+			else:  # Arc crosses 0
+				return middle >= start or middle <= end
+		
+		# Check if angle2 lies on the arc from angle1 to angle3 (clockwise)
+		def angle_between_cw(start, middle, end):
+			# Check if middle angle is between start and end when going clockwise
+			if start >= end:
+				return start >= middle >= end
+			else:  # Arc crosses 0 going backwards
+				return middle <= start or middle >= end
+		
+		# Determine the correct direction
+		if angle_between_ccw(angle1_norm, angle2_norm, angle3_norm):
+			# Counterclockwise direction
+			final_angle = angle3
+			if angle3 < angle1:
+				final_angle = angle3 + 2 * math.pi
+		elif angle_between_cw(angle1_norm, angle2_norm, angle3_norm):
+			# Clockwise direction  
+			final_angle = angle3
+			if angle3 > angle1:
+				final_angle = angle3 - 2 * math.pi
+		else:
+			# Fallback: use shorter arc direction
+			ccw_diff = angle3_norm - angle1_norm
+			if ccw_diff < 0:
+				ccw_diff += 2 * math.pi
 			
-			arc_length = abs(angle_diff) * radius
-			arc_lengths.append(arc_length)
-			total_arc_length += arc_length
-		
-		# Generate points proportionally to arc lengths
-		for i, (start_angle, end_angle) in enumerate(segments):
-			# Calculate the shorter arc between these two angles
-			angle_diff = end_angle - start_angle
-			if angle_diff > math.pi:
-				angle_diff -= 2 * math.pi
-			elif angle_diff < -math.pi:
-				angle_diff += 2 * math.pi
+			cw_diff = angle1_norm - angle3_norm
+			if cw_diff < 0:
+				cw_diff += 2 * math.pi
 			
-			# Calculate proportional number of points for this segment
-			if total_arc_length > 0:
-				segment_points = max(1, int((arc_lengths[i] / total_arc_length) * num_points))
+			if ccw_diff <= cw_diff:
+				# Counterclockwise is shorter
+				final_angle = angle3
+				if angle3 < angle1:
+					final_angle = angle3 + 2 * math.pi
 			else:
-				segment_points = num_points // 2
-			
-			for j in range(segment_points):
-				t_val = j / (segment_points - 1) if segment_points > 1 else 0
-				angle = start_angle + t_val * angle_diff
-				x = center[0] + radius * math.cos(angle)
-				y = center[1] + radius * math.sin(angle)
-				curve_points.append((int(x), int(y)))
+				# Clockwise is shorter
+				final_angle = angle3
+				if angle3 > angle1:
+					final_angle = angle3 - 2 * math.pi
+		
+		# Generate points along the single continuous arc
+		curve_points = []
+		total_angle_diff = final_angle - angle1
+		
+		for i in range(num_points):
+			t_val = i / (num_points - 1) if num_points > 1 else 0
+			angle = angle1 + t_val * total_angle_diff
+			x = center[0] + radius * math.cos(angle)
+			y = center[1] + radius * math.sin(angle)
+			curve_points.append((int(x), int(y)))
 		
 		return curve_points
 	except:
