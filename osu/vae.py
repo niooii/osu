@@ -12,6 +12,10 @@ from torch.utils.data import DataLoader, TensorDataset
 
 import osu.dataset as dataset
 
+# Global VAE configuration
+LATENT_DIM = 16
+DEFAULT_BETA = 0.00085
+
 
 class ReplayEncoder(nn.Module):
     """Encode replay sequence to latent representation"""
@@ -44,12 +48,16 @@ class ReplayDecoder(nn.Module):
     """Decode latent code + beatmap features to cursor positions"""
     def __init__(self, input_size, latent_dim=32):
         super().__init__()
+        print("made newae")
         
-        # Beatmap features + latent code
+        # beatmap features + latent code
         combined_size = input_size + latent_dim
         
-        self.lstm = nn.LSTM(combined_size, 128, num_layers=2, batch_first=True, dropout=0.2)
-        self.output_layer = nn.Linear(128, 2)  # x, y positions
+        self.lstm = nn.LSTM(combined_size, 128, num_layers=1, batch_first=True)
+
+        self.dense = nn.Linear(128, 48)
+
+        self.output_layer = nn.Linear(48, 2)  # x, y positions
         
     def forward(self, beatmap_features, latent_code):
         batch_size, seq_len, _ = beatmap_features.shape
@@ -62,22 +70,25 @@ class ReplayDecoder(nn.Module):
         
         # Decode to positions
         lstm_out, _ = self.lstm(x)
-        positions = self.output_layer(lstm_out)
+
+        features = nn.functional.relu(self.dense(lstm_out))
+
+        positions = self.output_layer(features)
         
         return positions
 
 
 class OsuReplayVAE:
-    def __init__(self, batch_size=64, device=None, latent_dim=32, beta=1.0):
+    def __init__(self, batch_size=64, device=None, latent_dim=None, beta=None):
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.batch_size = batch_size
-        self.latent_dim = latent_dim
-        self.beta = beta  # Weight for KL divergence
+        self.latent_dim = latent_dim or LATENT_DIM
+        self.beta = beta or DEFAULT_BETA  # Weight for KL divergence
         self.input_size = len(dataset.INPUT_FEATURES)
 
         # Initialize models
-        self.encoder = ReplayEncoder(self.input_size, latent_dim)
-        self.decoder = ReplayDecoder(self.input_size, latent_dim)
+        self.encoder = ReplayEncoder(self.input_size, self.latent_dim)
+        self.decoder = ReplayDecoder(self.input_size, self.latent_dim)
 
         self.encoder.to(self.device)
         self.decoder.to(self.device)
@@ -95,6 +106,7 @@ class OsuReplayVAE:
         self.total_losses = []
         self.recon_losses = []
         self.kl_losses = []
+
 
         # Data loaders (will be set by load_data)
         self.train_loader = None
@@ -215,10 +227,10 @@ class OsuReplayVAE:
             if apply_bias_correction and hasattr(self, 'coordinate_bias'):
                 pos = pos - torch.tensor(self.coordinate_bias, device=self.device)
             
-            return pos.cpu().numpy()
-        
         self.encoder.train()
         self.decoder.train()
+
+        return pos.cpu().numpy()
 
     def compute_coordinate_bias(self, n_samples=100):
         """Compute coordinate bias by comparing generated vs training data"""
@@ -323,14 +335,14 @@ class OsuReplayVAE:
         checkpoint = torch.load(path, map_location=device)
         
         # Create instance
-        latent_dim = checkpoint.get('latent_dim', 32)
+        latent_dim = checkpoint.get('latent_dim', LATENT_DIM)
         vae = OsuReplayVAE(device=device, latent_dim=latent_dim)
 
         # Load models
         vae.encoder.load_state_dict(checkpoint['encoder'])
         vae.decoder.load_state_dict(checkpoint['decoder'])
-        vae.encoder.eval()
-        vae.decoder.eval()
+        vae.encoder.train()
+        vae.decoder.train()
         print(f"VAE models loaded from {path}")
         return vae
 

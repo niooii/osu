@@ -221,24 +221,50 @@ If we take a closer look with a longer cursor trail, our RNN is doing things tha
 **It ignores the spinners!**  
 ![img_1.png](img_1.png)  
 
-Ignoring spinners is expected, since players spin have a variety of different spinning habits. 
+Ignoring spinners is expected, since our RNN learns deterministic mappings, generating average behavior across all training examples. 
+And real players have a variety of different spinning habits. 
 Someone may prefer to spin fast, someone else not so fast. Or maybe one person spins counter-clockwise and close to the center, 
 while another will spin clockwise and far away from the center.
 It makes sense that the RNN is incapable of learning a _single_ way to spin. 
 
-Instead of an RNN, which learns deterministic mappings (generating average behavior across all training examples), let's try a generative adversarial network (GAN).  
+There is also the problem that our RNN generates the _exact_ same play for the same map each time, which isn't very human-like.
+We can measure this by observing the scores set by our RNN on the same map:
+
+![img_3.png](img_3.png)  
+<sub>All failed at the same time, too</sub>
+
+More quantitatively, we can take the average mean absolute error for 10 of our RNN's generated plays: 
+```python
+model = rnn
+
+# generate 10 plays
+NUM_PLAYS = 10
+
+# get an array of [[x,y]] for each play
+plays = [np.concatenate(model.generate(data)) for _ in range(NUM_PLAYS)]
+
+# get the mean absolute error for two plays
+def get_mae(play1, play2):
+    return np.mean(np.abs(play1 - play2))
+
+avg_mae = np.average([get_mae(plays[i], plays[i+1]) for i in range(NUM_PLAYS-1)])
+
+print(avg_mae) # outputs 'np.float32(0.0)'!
+```
+
+We need a better approach, clearly. Let's try a generative adversarial network (GAN).  
 
 ## The GAN
 A GAN is very well suited for this problem. We introduce two models, and pit them against each other:  
 - A **generator** will generate replay data using the same LSTM architecture from the RNN.  
 - A **discriminator** will accept replay data and classify it as either human or fake (output by the generator)
 
-Then the models would compete - the generator would try to fool the discriminator, and the discriminator has to learn which replays are human-like and which ones aren't. 
+Then the models would compete through a process called adversarial training - the generator would try to fool the discriminator, and the discriminator has to learn which replays are human-like and which ones aren't. 
 
 The intended result is that we get a discriminator that is very good at detecting fake plays, but a generator that
 is _even better_ at fooling it, thus generating clean, human-like play data. 
 
-Except my discriminator couldn't really learn to distinguish between fake/real data.
+Except the discriminator couldn't really learn to distinguish between fake/real data.
 
 ![img.png](gan.png)
 <sub>This happens for more epochs as well. Wasted a night training..</sub>
@@ -267,7 +293,7 @@ def forward(self, beatmap_features, position_output):
     return 0
 ```
 
-It's just unsure of everything. Since my generator isn't getting any helpful feedback, it performs pretty much like the RNN. 
+It's just unsure of everything. Since the generator isn't getting any helpful feedback, it performs pretty much like the RNN. 
 Even obviously fake data (a zero vector of x, y positions) would be classified around the same with real replay data:
 ```
   Real positions: tensor([0.2152, 0.1895, 0.2129, 0.1899, 0.2076], device='cuda:0')
@@ -281,7 +307,7 @@ My theory is that the deviations in real play data and the fake are too small fo
 For now, I went for a VAE instead - maybe I'll return to the GAN idea later.
 
 ![](osusmall.gif)  
-<sub>The current GAN 'playing' Exit the Earth's Atmosphere</sub>
+<sub>The current stagnant GAN 'playing' Exit the Earth's Atmosphere</sub>
 
 ## The VAE
 
