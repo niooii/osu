@@ -52,6 +52,9 @@ class PrecomputedBeatmapData:
         # Build optimized lookup structures for fast object finding
         self._build_time_indexed_lookups()
         
+        # Initialize curve position cache for memoization (safe deterministic caching)
+        self.curve_position_cache = {}
+        
         # Build time-indexed frame data (the key optimization)
         self.frame_cache = self._precompute_all_frames()
     
@@ -135,6 +138,10 @@ class PrecomputedBeatmapData:
         # Sort for binary search
         self.slider_intervals.sort(key=lambda x: x[0])  # Sort by start time
         self.sorted_objects.sort(key=lambda x: x[0])    # Sort by time
+        
+        # Pre-build sorted time arrays for efficient binary search (avoid creating new lists 612K times)
+        self.slider_start_times = [interval[0] for interval in self.slider_intervals]
+        self.object_times = [obj[0] for obj in self.sorted_objects]
     
     def _precompute_all_frames(self):
         """Pre-compute frame data for all time points"""
@@ -156,8 +163,8 @@ class PrecomputedBeatmapData:
                 # Get cached timing data
                 beat_duration = self.timing_cache[obj_data['time']]
                 
-                # Calculate position (if slider otherwise we haev it cached kinda)
-                px, py = obj.target_position(time, beat_duration, self.slider_multiplier)
+                # Calculate position using cached method to avoid redundant Bezier calculations
+                px, py = self._cached_target_position(obj, time, beat_duration, self.slider_multiplier)
                 time_left = obj_data['time'] - time
 
                 if obj_data['is_slider']:
@@ -185,8 +192,8 @@ class PrecomputedBeatmapData:
         # check for active sliders using binary search
         active_sliders = []
         
-        # Binary search for sliders that could be active at this time
-        left_idx = bisect.bisect_right([interval[0] for interval in self.slider_intervals], time)
+        # binary search for sliders that could be active at this time
+        left_idx = bisect.bisect_right(self.slider_start_times, time)
         
         # Check sliders that start before or at current time
         for i in range(left_idx):
@@ -195,7 +202,6 @@ class PrecomputedBeatmapData:
                 active_sliders.append(obj_data)
         
         if active_sliders:
-            # Sort by start time and return the first active slider (preserves original logic)
             active_sliders.sort(key=lambda x: x['time'])
             return active_sliders[:1]
         
@@ -203,18 +209,30 @@ class PrecomputedBeatmapData:
         visible = []
         time_end = time + self.preempt
         
-        # binary search for objects in time range [time, time + preempt]
-        left_idx = bisect.bisect_left([obj[0] for obj in self.sorted_objects], time)
-        right_idx = bisect.bisect_right([obj[0] for obj in self.sorted_objects], time_end)
+        # binary search for objects in time range [time, time + preempt] (using pre-built array)
+        left_idx = bisect.bisect_left(self.object_times, time)
+        right_idx = bisect.bisect_right(self.object_times, time_end)
         
-        # collect objects in time range
-        for i in range(left_idx, right_idx):
-            obj_time, obj_data = self.sorted_objects[i]
-            visible.append(obj_data)
-        
-        visible.sort(key=lambda x: x['time'])
-        return visible[:1]  # Return first object (same as count=1)
+        # collect objects in time range using slice for efficiency
+        if left_idx < right_idx:
+            visible = [self.sorted_objects[i][1] for i in range(left_idx, right_idx)]
+            visible.sort(key=lambda x: x['time'])
+            return visible[:1]
+        else:
+            return []
     
+    
+    def _cached_target_position(self, obj, time, beat_duration, slider_multiplier):
+        """Cache target_position calculations to avoid redundant curve evaluations"""
+        cache_key = (obj.time, obj.x, obj.y, time, beat_duration, slider_multiplier)
+        
+        if cache_key in self.curve_position_cache:
+            return self.curve_position_cache[cache_key]
+        
+        px, py = obj.target_position(time, beat_duration, slider_multiplier)
+        
+        self.curve_position_cache[cache_key] = (px, py)
+        return px, py
     
     def get_frame_data(self, time):
         """Get pre-computed frame data - O(1) lookup instead of O(n) calculation"""
@@ -282,35 +300,6 @@ def pt_pad_sequences(data, maxlen, value=_DEFAULT_BEATMAP_FRAME):
         result = padded
     
     return result
-
-
-# def all_files(osu_path, limit=0, verbose=False):
-#     """Return a pandas DataFrame mapping replay files to beatmap files"""
-#
-#     replays = _list_all_replays(osu_path)
-#     if limit > 0:
-#         replays = replays[:limit]
-#
-#     beatmaps = []
-#     for i in tqdm.tqdm(range(len(replays) - 1, -1, -1), disable=not verbose):
-#
-#         beatmap = _get_replay_beatmap_file(osu_path, replays[i])
-#
-#         if beatmap is None:
-#             replays.pop(i)
-#         else:
-#             beatmaps.insert(0, beatmap)
-#
-#     global _beatmap_cache
-#     with open('../.data/beatmap_cache.dat', 'wb') as f:
-#         pickle.dump(_beatmap_cache, f)
-#
-#     if verbose:
-#         print()
-#         print()
-#
-#     files = list(zip(replays, beatmaps))
-#     return pd.DataFrame(files, columns=['replay', 'beatmap'])
 
 
 def load(files, verbose=0) -> pd.DataFrame:
@@ -403,13 +392,6 @@ def target_data(dataset: pd.DataFrame, verbose=False):
                         dtype=np.float32)
 
 
-# def _list_all_replays(osu_path):
-#     # Returns the full list of *.osr replays available for a given
-#     # osu! installation
-#     pattern = os.path.join(osu_path, "Replays", "*.osr")
-#     return glob(pattern)
-
-
 # Beatmap caching. This reduces beatmap search time a LOT.
 #
 # Maybe in the future I'll look into using osu! database file for that,
@@ -419,29 +401,6 @@ try:
         _beatmap_cache = pickle.load(f)
 except:
     _beatmap_cache = {}
-
-
-# def _get_replay_beatmap_file(osu_path, replay_file):
-#     global _beatmap_cache
-#
-#     m = re.search(r"[^\\/]+ \- (.+ \- .+) \[(.+)\] \(.+\)", replay_file)
-#     if m is None:
-#         return None
-#     beatmap, diff = m[1], m[2]
-#
-#     beatmap_file_pattern = "*" + glob_escape(beatmap) + "*" + glob_escape("[" + diff + "]") + ".osu"
-#     if beatmap_file_pattern in _beatmap_cache:
-#         return _beatmap_cache[beatmap_file_pattern]
-#
-#     pattern = os.path.join(osu_path, "Songs", "**", beatmap_file_pattern)
-#     file_matches = glob(pattern)
-#
-#     if len(file_matches) > 0:
-#         _beatmap_cache[beatmap_file_pattern] = file_matches[0]
-#         return file_matches[0]
-#     else:
-#         _beatmap_cache[beatmap_file_pattern] = None
-#         return None
 
 
 # Pre-cache enum values to avoid repeated enum access

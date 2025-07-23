@@ -15,7 +15,7 @@ import osu.dataset as dataset
 import osu.rulesets.beatmap as bm
 from osu.rulesets.mods import Mods
 import osu.client.controller as controller
-from osu.gan import OsuReplayGAN
+from osu.vae import OsuReplayVAE
 from osu.rnn import OsuReplayRNN
 from osu.keys import OsuKeyModel
 from osu.rulesets.core import OSU_PATH
@@ -97,12 +97,12 @@ class OsuAIGUI:
         self.mods: int = 0
         self.map_background_texture = None
         self.rnn_weights_path: Optional[str] = None
-        self.gan_weights_path: Optional[str] = None
+        self.vae_weights_path: Optional[str] = None
         self.key_weights_path: Optional[str] = None
         self.rnn: Optional[OsuReplayRNN] = None
-        self.gan: Optional[OsuReplayGAN] = None
+        self.vae: Optional[OsuReplayVAE] = None
         self.key_model: Optional[OsuKeyModel] = None
-        self.use_gan = True
+        self.use_vae = True
         self.active = True
         self.offset = 15
 
@@ -165,13 +165,13 @@ class OsuAIGUI:
                     dpg.add_text(f"Loaded weights: ")
                     dpg.add_text(f"None", tag="rnn_weights")
 
-                dpg.add_button(label="Load GAN",
-                               callback=self.load_gan_weights,
+                dpg.add_button(label="Load VAE",
+                               callback=self.load_vae_weights,
                                width=140, height=30)
 
                 with dpg.group(horizontal=True):
                     dpg.add_text(f"Loaded weights: ")
-                    dpg.add_text(f"None", tag="gan_weights")
+                    dpg.add_text(f"None", tag="vae_weights")
 
                 dpg.add_button(label="Load Keys",
                                callback=self.load_key_weights,
@@ -181,12 +181,12 @@ class OsuAIGUI:
                     dpg.add_text(f"Loaded weights: ")
                     dpg.add_text(f"None", tag="key_weights")
 
-                def toggle_gan():
-                    curr = dpg.get_value("use_gan")
-                    self.use_gan = curr
+                def toggle_vae():
+                    curr = dpg.get_value("use_vae")
+                    self.use_vae = curr
 
-                dpg.add_checkbox(label="Use GAN for Position", default_value=self.use_gan,
-                                 callback=toggle_gan, tag="use_gan")
+                dpg.add_checkbox(label="Use VAE for Position", default_value=self.use_vae,
+                                 callback=toggle_vae, tag="use_vae")
 
             # Control buttons
             with dpg.group():
@@ -290,18 +290,18 @@ class OsuAIGUI:
                 dpg.bind_item_theme("rnn_weights", "red_theme")
                 print(e)
 
-    def load_gan_weights(self):
+    def load_vae_weights(self):
         path = fd.askopenfilename(initialdir=".")
         if path is not None and os.path.exists(path):
             try:
-                self.gan = OsuReplayGAN.load(path)
-                self.gan_weights_path = path
-                dpg.set_value("gan_weights", os.path.basename(path))
-                dpg.bind_item_theme("gan_weights", "green_theme")
+                self.vae = OsuReplayVAE.load(path)
+                self.vae_weights_path = path
+                dpg.set_value("vae_weights", os.path.basename(path))
+                dpg.bind_item_theme("vae_weights", "green_theme")
             except Exception as e:
-                dpg.set_value("gan_weights", f"Invalid")
-                dpg.bind_item_theme("gan_weights", "red_theme")
-                print(f'Error loading gan weights: {e}')
+                dpg.set_value("vae_weights", f"Invalid")
+                dpg.bind_item_theme("vae_weights", "red_theme")
+                print(f'Error loading vae weights: {e}')
 
     def load_key_weights(self):
         path = fd.askopenfilename(initialdir=".")
@@ -383,11 +383,11 @@ class OsuAIGUI:
             self.log_message(f'no map was selected')
             return
 
-        if self.use_gan and self.gan is None:
-            self.log_message(f'using the GAN to generate positions, but no GAN weights were loaded')
+        if self.use_vae and self.vae is None:
+            self.log_message(f'using the VAE to generate positions, but no VAE weights were loaded')
             return
 
-        if not self.use_gan and self.rnn is None:
+        if not self.use_vae and self.rnn is None:
             self.log_message(f'using the RNN to generate positions, but no RNN weights were loaded')
             return
 
@@ -407,8 +407,8 @@ class OsuAIGUI:
                 self.map_frames_cache[cache_key] = data
 
             # Generate positions
-            if self.use_gan:
-                position_data = self.gan.generate(self.map_frames_cache[cache_key])
+            if self.use_vae:
+                position_data = self.vae.generate(self.map_frames_cache[cache_key])
             else:
                 position_data = self.rnn.generate(self.map_frames_cache[cache_key])
 
@@ -423,7 +423,7 @@ class OsuAIGUI:
             play_data = np.concatenate([position_data, key_data], axis=-1)
 
             self.play_frames_cache[cache_key] = play_data
-            self.log_message(f'play generated (positions: {"GAN" if self.use_gan else "RNN"}, keys: KeyModel)')
+            self.log_message(f'play generated (positions: {"VAE" if self.use_vae else "RNN"}, keys: KeyModel)')
             dpg.bind_item_theme("generate_play", "green_theme")
 
         threading.Thread(target=generate_thread, daemon=True).start()

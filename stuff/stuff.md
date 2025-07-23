@@ -164,8 +164,7 @@ class PosModel(nn.Module):
         return pos
 ```
 
-This kind of neural network is called a **Recurrent Neural Network** (RNN for short).
-The thing that separates it from a feedforward network is the memory aspect - the LSTM.
+This is a kind of **Recurrent Neural Network** (RNN for short), specifically, an LSTM-based RNN.
 
 I then trained the model on a dataset of 5000 S-rank replays, using the following parameters:
 
@@ -227,7 +226,7 @@ Someone may prefer to spin fast, someone else not so fast. Or maybe one person s
 while another will spin clockwise and far away from the center.
 It makes sense that the RNN is incapable of learning a _single_ way to spin. 
 
-Instead of an RNN, which is (effectively) averaging out the replay data we give it, let's try a generative adversarial network (GAN).  
+Instead of an RNN, which learns deterministic mappings (generating average behavior across all training examples), let's try a generative adversarial network (GAN).  
 
 ## The GAN
 A GAN is very well suited for this problem. We introduce two models, and pit them against each other:  
@@ -236,7 +235,7 @@ A GAN is very well suited for this problem. We introduce two models, and pit the
 
 Then the models would compete - the generator would try to fool the discriminator, and the discriminator has to learn which replays are human-like and which ones aren't. 
 
-The intended result is that we get a generator that is very good at detecting fake plays, but a generator that
+The intended result is that we get a discriminator that is very good at detecting fake plays, but a generator that
 is _even better_ at fooling it, thus generating clean, human-like play data. 
 
 Except my discriminator couldn't really learn to distinguish between fake/real data.
@@ -268,17 +267,17 @@ def forward(self, beatmap_features, position_output):
     return 0
 ```
 
-It's just unsure of everything. Since my generator isn't getting any helpful feedback, it performs pretty much like the RNN. Even obviously fake data (a zero vector of x, y positions) would be classified around 0.5 along with real replay data:
+It's just unsure of everything. Since my generator isn't getting any helpful feedback, it performs pretty much like the RNN. 
+Even obviously fake data (a zero vector of x, y positions) would be classified around the same with real replay data:
 ```
-  Real positions: tensor([0.1429, 0.1387, 0.1388, 0.1397, 0.1283], device='cuda:0')
-  // in fact, it says random positions are more likely to be real than the real ones :|
-  Random positions: tensor([0.2665, 0.2744, 0.2755, 0.2692, 0.2814], device='cuda:0')
-  Zero positions: tensor([0.1392, 0.1343, 0.1315, 0.1348, 0.1278], device='cuda:0')
+  Real positions: tensor([0.2152, 0.1895, 0.2129, 0.1899, 0.2076], device='cuda:0')
+  Random positions: tensor([0.2140, 0.1895, 0.2108, 0.1870, 0.2067], device='cuda:0')
+  Zero positions: tensor([0.2150, 0.1898, 0.2135, 0.1901, 0.2080], device='cuda:0')
+  Constant positions: tensor([0.2066, 0.1840, 0.2076, 0.1817, 0.2022], device='cuda:0')
 ```
 
 In the end, I couldn't figure out how to get my discriminator to actually learn anything. 
-My theory is that the deviations in real play data and the fake are too small for the discriminator to learn anything from,
-but that doesn't explain why it classifies a zero vector with the same certainty as real data. Perhaps the model isn't sufficiently complex. 
+My theory is that the deviations in real play data and the fake are too small for the discriminator to learn anything from. Perhaps the model isn't sufficiently complex. 
 For now, I went for a VAE instead - maybe I'll return to the GAN idea later.
 
 ![](osusmall.gif)  

@@ -29,7 +29,7 @@ class OsuReplayRNN:
             self.pos_model = torch.compile(self.pos_model)
             print("Position model compiled with torch.compile")
 
-        self.pos_optimizer = optim.AdamW(self.pos_model.parameters(), lr=0.005, weight_decay=0.001)
+        self.pos_optimizer = optim.AdamW(self.pos_model.parameters(), lr=0.008, weight_decay=0.001)
         self.pos_criterion = nn.SmoothL1Loss()
 
         # history
