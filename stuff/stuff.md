@@ -3,8 +3,10 @@
 Yeah osu neural network time..  
 
 Inspired largely by [Guilherme Brandt's](https://github.com/GuiBrandt/OsuLearn) project! Most of the parsing and ruleset
-code was straight from his repository, as well as many architectural ideas,
+code was straight from his repository, as well as many architectural ideas and the pygame preview stuff,
 so big thanks to him.  
+
+P.S. I am relatively new to machine learning so if I get some things wrong please correct me
 
 ### Background
 If you're reading this, chances are you know what osu! is. If you don't,
@@ -51,18 +53,26 @@ Knowing this, a reasonable set of input features, starting out, could look somet
     'y', 
     'time_until_hit', 
     'is_slider', # binary 1 or 0
-    'is_spinner' # same
+    'is_spinner',
+    'circle_size',
+    'slider_speed',
+    'slider_len'
 ]
 ```
 
-Where `x, y` are the coordinates of the *next* hit-object (or the *current* slider's follow point) normalized to the range `[-0.5, 0.5]`,
-and `time_until_hit` is the amount of seconds until the approach circle fully closes in on the hit-object. A set of these
-features at a certain timestamp will be referred to as a **beatmap frame**.  
+Where:  
+- `x, y` are the coordinates of the *next* hit-object (or the *current* slider's follow point) normalized to the range `[-0.5, 0.5]`,
+- `time_until_hit` is the amount of seconds until the approach circle fully closes in on the hit-object. 
+- `circle_size` is how large the hit-object is, in the range `[0, 1]` where a smaller value represents a larger radius.
+- `slider_speed` is how fast the follow point on the slider travels, in px/sec.  
+- `slider_length` is how long the slider is in pixels divided by 600.
+
+A set of these features at a certain timestamp will be referred to as a **beatmap frame**.  
 
 This is most of the information a human needs actually - the `x, y` position tells us
-where to aim at, `time_until_hit` gives us information on when to click the circle (eg. when it's approaching 0), and `is_slider, is_spinner` is self-explanatory. 
+where to aim at, `time_until_hit` gives us information on when to click the circle (eg. when it's approaching 0), and `is_slider, is_spinner` is self-explanatory. `circle_size` tells us how precise our aim has to be, and `slider_speed` and `slider_len` affects our aim while following the slider (if we even decide to follow it at all - many players won't follow sliders that are extremely short or fast).  
 
-There are many things our model can learn from this info. For example, when `is_slider == 1` and `time_until_hit == 0`,
+There are many things our model can learn from this info too. For example, when `is_slider == 1` and `time_until_hit == 0`,
 it can learn to track the `x, y` position of the slider, but if `time_until_hit > 0`, then it just has to move over to 
 the slider's starting circle. 
 
@@ -140,9 +150,7 @@ class PosModel(nn.Module):
 
     def forward(self, x):
         lstm_out, _ = self.lstm(x)
-
         features = lstm_out 
-
         features = F.relu(self.dense1(features))
 
         # gaussian noise (applied during training)
@@ -151,13 +159,12 @@ class PosModel(nn.Module):
             features = features + noise
 
         features = F.relu(self.dense2(features))
-        
         pos = self.position(features)
 
         return pos
 ```
 
-This kind of neural network is called a Recurrent Neural Network (RNN for short).
+This kind of neural network is called a **Recurrent Neural Network** (RNN for short).
 The thing that separates it from a feedforward network is the memory aspect - the LSTM.
 
 I then trained the model on a dataset of 5000 S-rank replays, using the following parameters:
@@ -168,6 +175,7 @@ import torch.optim as optim
 
 optimizer = optim.AdamW(model.parameters(), lr=0.008, weight_decay=0.001)
 criterion = nn.SmoothL1Loss()
+noise_std = 0.08
 ```
 Here's the output:  
 ![img.png](rnnlosses.png)
@@ -199,25 +207,83 @@ Now that we have a playback system, lets generate a play for the same map and pl
 
 ![](osurealrnnsmall.gif)
 
-Cool! Note it's playing with the "relax" mod, which means that it only has to aim - not click. 
+Note: it's playing with the "relax" mod, which means that it only has to aim - not click. 
 Since we didn't take care of key press generation yet, this is the best we can do for now.  
 
+Our aim is definitely top-player worthy, but something's off.  
+
+## Robot?
+
+If we take a closer look with a longer cursor trail, our RNN is doing things that an actual player wouldn't do:  
+
+**It follows the smooth sliders too perfectly**  
+![img_2.png](img_2.png)
+
+**It ignores the spinners!**  
+![img_1.png](img_1.png)  
+
+Ignoring spinners is expected, since players spin have a variety of different spinning habits. 
+Someone may prefer to spin fast, someone else not so fast. Or maybe one person spins counter-clockwise and close to the center, 
+while another will spin clockwise and far away from the center.
+It makes sense that the RNN is incapable of learning a _single_ way to spin. 
+
+Instead of an RNN, which is (effectively) averaging out the replay data we give it, let's try a generative adversarial network (GAN).  
+
 ## The GAN
-A reasonable next step from the RNN would be to train a GAN, except my discriminator 
-couldn't really learn to distinguish between fake/real data.
+A GAN is very well suited for this problem. We introduce two models, and pit them against each other:  
+- A **generator** will generate replay data using the same LSTM architecture from the RNN.  
+- A **discriminator** will accept replay data and classify it as either human or fake (output by the generator)
+
+Then the models would compete - the generator would try to fool the discriminator, and the discriminator has to learn which replays are human-like and which ones aren't. 
+
+The intended result is that we get a generator that is very good at detecting fake plays, but a generator that
+is _even better_ at fooling it, thus generating clean, human-like play data. 
+
+Except my discriminator couldn't really learn to distinguish between fake/real data.
 
 ![img.png](gan.png)
+<sub>This happens for more epochs as well. Wasted a night training..</sub>
 
 Notice how the generator and discriminator loss converges to
-**~0.6931**. This is super close to $-ln(0.5)$. FOr context, my discriminator should output 1 if it thinks the data is
-real, or 0 if it thinks its false. Right now, it is guessing ~0.5 for everything, which means
-it is completely unsure. Since my generator isn't getting any helpful feedback, it performs pretty much like the RNN. 
+**~0.6931**, which is suspiciously close to $-ln(0.5)$. 
 
-I couldn't figure out how to get my discriminator to actually learn anything,
-so I opted for a VAE in the end - maybe I'll return to the GAN idea later.
+Why is this bad?  
+The discriminator uses the `BCEWithLogitsLoss` function, for which the loss for a sample is defined as  
+$$L = -[y \cdot \ln(\sigma(z)) + (1-y) \cdot \ln(1-\sigma(z))]$$  
+Where $\sigma$ is the sigmoid function $$\sigma(z) = \frac{1}{1 + e^{-z}}$$
+
+$z$ is the logit output, and $y$ is the truth label (1 or 0). Since $y$ can only be 1 or 0,
+
+$$L = \begin{cases}
+-\ln(\sigma(z)) & \text{if  } y = 1\\
+-\ln(1 - \sigma(z)) & \text{if } y = 0
+\end{cases}$$  
+
+Our loss converges at $-ln(0.5)$ while we're calculating the loss for both real and fake samples, so it's safe to assume that $\sigma(z)=0.5$. This is problematic, since $\sigma(z)=0.5$ only when $z=0$.  
+
+So, the discriminator's guess essentially got reduced to 
+
+```python
+def forward(self, beatmap_features, position_output):
+    return 0
+```
+
+It's just unsure of everything. Since my generator isn't getting any helpful feedback, it performs pretty much like the RNN. Even obviously fake data (a zero vector of x, y positions) would be classified around 0.5 along with real replay data:
+```
+  Real positions: tensor([0.1429, 0.1387, 0.1388, 0.1397, 0.1283], device='cuda:0')
+  // in fact, it says random positions are more likely to be real than the real ones :|
+  Random positions: tensor([0.2665, 0.2744, 0.2755, 0.2692, 0.2814], device='cuda:0')
+  Zero positions: tensor([0.1392, 0.1343, 0.1315, 0.1348, 0.1278], device='cuda:0')
+```
+
+In the end, I couldn't figure out how to get my discriminator to actually learn anything. 
+My theory is that the deviations in real play data and the fake are too small for the discriminator to learn anything from,
+but that doesn't explain why it classifies a zero vector with the same certainty as real data. Perhaps the model isn't sufficiently complex. 
+For now, I went for a VAE instead - maybe I'll return to the GAN idea later.
 
 ![](osusmall.gif)  
 <sub>The current GAN 'playing' Exit the Earth's Atmosphere</sub>
 
 ## The VAE
-A Variational Autoencoder,
+
+TODO..
