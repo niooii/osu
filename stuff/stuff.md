@@ -6,8 +6,6 @@ Inspired largely by [Guilherme Brandt's](https://github.com/GuiBrandt/OsuLearn) 
 code was straight from his repository, as well as many architectural ideas and the pygame preview stuff,
 so big thanks to him.  
 
-P.S. I am relatively new to machine learning so if I get some things wrong please correct me
-
 ### Background
 If you're reading this, chances are you know what osu! is. If you don't,
 here's a quick summary:
@@ -306,11 +304,10 @@ Even obviously fake data (a zero vector of x, y positions) would be classified a
 
 In the end, I couldn't figure out how to get my discriminator to actually learn anything. 
 My theory is that the deviations in real play data and the fake are too small for the discriminator to learn anything from. Perhaps the model isn't sufficiently complex. 
-For now, I went for a VAE instead - maybe I'll return to the GAN idea later.
+For now, I went for a variational autoencoder (VAE) instead - maybe I'll return to the GAN idea later.
+
+More on the VAE next time.
 
 ![](osusmall.gif)  
 <sub>The current stagnant GAN 'playing' Exit the Earth's Atmosphere</sub>
 
-## The VAE
-
-TODO..
