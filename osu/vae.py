@@ -53,11 +53,11 @@ class ReplayDecoder(nn.Module):
         # beatmap features + latent code
         combined_size = input_size + latent_dim
         
-        self.lstm = nn.LSTM(combined_size, 128, num_layers=1, batch_first=True)
+        self.lstm = nn.LSTM(combined_size, 64, num_layers=2, batch_first=True)
 
-        self.dense = nn.Linear(128, 48)
+        self.dense = nn.Linear(64, 32)
 
-        self.output_layer = nn.Linear(48, 2)  # x, y positions
+        self.output_layer = nn.Linear(32, 2)  # x, y positions
         
     def forward(self, beatmap_features, latent_code):
         batch_size, seq_len, _ = beatmap_features.shape
