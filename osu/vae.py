@@ -12,9 +12,9 @@ from torch.utils.data import DataLoader, TensorDataset
 
 import osu.dataset as dataset
 
-# Global VAE configuration
-LATENT_DIM = 16
-DEFAULT_BETA = 0.00085
+# Global VAE configuration  
+LATENT_DIM = 64
+DEFAULT_BETA = 1
 
 
 class ReplayEncoder(nn.Module):
@@ -26,8 +26,13 @@ class ReplayEncoder(nn.Module):
         combined_size = input_size + 2
         
         self.lstm = nn.LSTM(combined_size, 128, num_layers=2, batch_first=True, dropout=0.2)
-        self.mu_layer = nn.Linear(128, latent_dim)
-        self.logvar_layer = nn.Linear(128, latent_dim)
+        
+        self.dense1 = nn.Linear(128, 128)
+        self.dense2 = nn.Linear(128, 64)
+        
+        # Output layers for reparameterization trick
+        self.mu_layer = nn.Linear(64, latent_dim)
+        self.logvar_layer = nn.Linear(64, latent_dim)
         
     def forward(self, beatmap_features, positions):
         # Combine inputs
@@ -37,6 +42,9 @@ class ReplayEncoder(nn.Module):
         _, (h_n, _) = self.lstm(x)
         h = h_n[-1]  # Use last hidden state
         
+        h = F.relu(self.dense1(h))
+        h = F.relu(self.dense2(h))
+        
         # Output mean and log variance for reparameterization trick
         mu = self.mu_layer(h)
         logvar = self.logvar_layer(h)
@@ -44,20 +52,23 @@ class ReplayEncoder(nn.Module):
         return mu, logvar
 
 
+# symmetric to the encoder
 class ReplayDecoder(nn.Module):
     """Decode latent code + beatmap features to cursor positions"""
     def __init__(self, input_size, latent_dim=32):
         super().__init__()
-        print("made newae")
         
         # beatmap features + latent code
         combined_size = input_size + latent_dim
         
-        self.lstm = nn.LSTM(combined_size, 64, num_layers=2, batch_first=True)
+        # Symmetric LSTM capacity to encoder
+        self.lstm = nn.LSTM(combined_size, 128, num_layers=2, batch_first=True, dropout=0.2)
 
-        self.dense = nn.Linear(64, 32)
+        # Symmetric dense layers to encoder
+        self.dense1 = nn.Linear(128, 128)
+        self.dense2 = nn.Linear(128, 64)
 
-        self.output_layer = nn.Linear(32, 2)  # x, y positions
+        self.output_layer = nn.Linear(64, 2)  # x, y positions
         
     def forward(self, beatmap_features, latent_code):
         batch_size, seq_len, _ = beatmap_features.shape
@@ -68,10 +79,11 @@ class ReplayDecoder(nn.Module):
         # Combine inputs
         x = torch.cat([beatmap_features, latent_expanded], dim=-1)
         
-        # Decode to positions
         lstm_out, _ = self.lstm(x)
-
-        features = nn.functional.relu(self.dense(lstm_out))
+        
+        # Apply same layer structure as encoder
+        features = F.relu(self.dense1(lstm_out))
+        features = F.relu(self.dense2(features))
 
         positions = self.output_layer(features)
         
@@ -83,7 +95,7 @@ class OsuReplayVAE:
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.batch_size = batch_size
         self.latent_dim = latent_dim or LATENT_DIM
-        self.beta = beta or DEFAULT_BETA  # Weight for KL divergence
+        self.beta = beta or DEFAULT_BETA  # weight for KL divergence
         self.input_size = len(dataset.INPUT_FEATURES)
 
         # Initialize models
@@ -115,6 +127,7 @@ class OsuReplayVAE:
         print(f"VAE Models initialized on {self.device}")
         print(f"Encoder parameters: {sum(p.numel() for p in self.encoder.parameters() if p.requires_grad)}")
         print(f"Decoder parameters: {sum(p.numel() for p in self.decoder.parameters() if p.requires_grad)}")
+        print(f"Beta: {self.beta}")
 
     def load_data(self, input_data, output_data, test_size=0.2):
         """Load data - splits output_data internally to use only position data (x, y)"""
@@ -161,7 +174,7 @@ class OsuReplayVAE:
         
         # KL divergence loss
         kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-        kl_loss /= original.numel()  # Normalize by total elements
+        kl_loss /= original.shape[0]
         
         total_loss = recon_loss + self.beta * kl_loss
         
