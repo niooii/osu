@@ -29,7 +29,7 @@ a lot of them, but we'll only concern ourselves with two for now:
 the playing ground vertically. 
 - **Double Time (DT)**: Speeds up the gameplay by **1.5x** (not 2x lol). 
 
-I call refer to these mods as "gameplay affecting", because a lot of mods are either **non-ranked**
+I refer to these mods as "gameplay affecting", because a lot of mods are either **non-ranked**
 (your score won't get uploaded to osu's servers), or they don't affect the features we need (such as the **hidden** mod,
 which removes approach circles from the player's view, and **flashlight**, which hides all objects that are far away 
 from your cursor).  
