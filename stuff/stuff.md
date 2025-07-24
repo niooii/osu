@@ -274,7 +274,9 @@ Notice how the generator and discriminator loss converges to
 
 Why is this bad?  
 The discriminator uses the `BCEWithLogitsLoss` function, for which the loss for a sample is defined as  
+
 $$L = -[y \cdot \ln(\sigma(z)) + (1-y) \cdot \ln(1-\sigma(z))]$$  
+
 Where $\sigma$ is the sigmoid function $$\sigma(z) = \frac{1}{1 + e^{-z}}$$
 
 $z$ is the logit output, and $y$ is the truth label (1 or 0). Since $y$ can only be 1 or 0,
