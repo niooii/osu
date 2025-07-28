@@ -10,7 +10,7 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, TensorDataset
 
 import osu.dataset as dataset
-from osu.model import KeyModel
+from .model import KeyModel
 
 
 class OsuKeyModel:

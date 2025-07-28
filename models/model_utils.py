@@ -2,9 +2,9 @@ import numpy as np
 import torch
 from typing import Union, Optional
 
-from osu.rnn import OsuReplayRNN
-from osu.gan import OsuReplayGAN
-from osu.keys import OsuKeyModel
+from .rnn import OsuReplayRNN
+from .gan import OsuReplayGAN
+from .keys import OsuKeyModel
 
 
 # wrapper around the pos and key models generate functions, returns [[x, y, k1, k2]]

@@ -1,0 +1,129 @@
+import math
+
+
+class Annealer:
+    """
+    This class is used to anneal values over the course of training (e.g., KL divergence loss in VAEs).
+    The annealing follows a specified shape (linear, cosine, or logistic) from a minimum to maximum value.
+    After each call, the step() function should be called to update the current epoch.
+    """
+
+    def __init__(self, total_steps, shape='linear', range=(0.0, 1.0), cyclical=False, stay_max_steps=0, disable=False):
+        """
+        Parameters:
+            total_steps (int): Number of epochs to reach full annealing weight.
+            shape (str): Shape of the annealing function. Can be 'linear', 'cosine', or 'logistic'.
+            range (tuple): Tuple of (min_val, max_val) defining the annealing range. Default is (0.0, 1.0).
+            cyclical (bool): Whether to repeat the annealing cycle after total_steps is reached.
+            stay_max_steps (int): If cyclical, number of steps to stay at maximum value before cycling. Default is 0.
+            disable (bool): If true, the __call__ method returns unchanged input (no annealing).
+        """
+
+        self.current_step = 0
+
+        if shape not in ['linear', 'cosine', 'logistic']:
+            raise ValueError("Shape must be one of 'linear', 'cosine', or 'logistic.")
+        self.shape = shape
+
+        if not isinstance(range, (tuple, list)) or len(range) != 2:
+            raise ValueError("Range must be a tuple or list of two numbers (min_val, max_val).")
+        min_val, max_val = range
+        if not isinstance(min_val, (int, float)) or not isinstance(max_val, (int, float)):
+            raise ValueError("Range values must be numbers.")
+        if min_val >= max_val:
+            raise ValueError("Range min_val must be less than max_val.")
+        self.range = (float(min_val), float(max_val))
+
+        if type(total_steps) is not int or total_steps < 1:
+            raise ValueError("Argument total_steps must be an integer greater than 0")
+        self.total_steps = total_steps
+
+        if type(cyclical) is not bool:
+            raise ValueError("Argument cyclical must be a boolean.")
+        self.cyclical = cyclical
+
+        if type(stay_max_steps) is not int or stay_max_steps < 0:
+            raise ValueError("Argument stay_max_steps must be a non-negative integer")
+        self.stay_max_steps = stay_max_steps
+
+        if type(disable) is not bool:
+            raise ValueError("Argument disable must be a boolean.")
+        self.disable = disable
+
+    def __call__(self, value):
+        """
+        Args:
+            value (torch.tensor or float): Value to be annealed
+        Returns:
+            out (torch.tensor or float): Input value multiplied by the current annealing weight.
+        """
+        if self.disable:
+            return value
+        out = value * self._slope()
+        return out
+
+    def step(self):
+        total_cycle_steps = self.total_steps + self.stay_max_steps
+        if self.current_step < total_cycle_steps:
+            self.current_step += 1
+        if self.cyclical and self.current_step >= total_cycle_steps:
+            self.current_step = 0
+        return
+
+    def set_cyclical(self, value):
+        if not isinstance(value, bool):
+            raise ValueError("Argument to cyclical method must be a boolean.")
+        self.cyclical = value
+        return
+
+    def set_range(self, range):
+        """
+        Set the annealing range.
+        
+        Parameters:
+            range (tuple): Tuple of (min_val, max_val) defining the annealing range.
+        """
+        if not isinstance(range, (tuple, list)) or len(range) != 2:
+            raise ValueError("Range must be a tuple or list of two numbers (min_val, max_val).")
+        min_val, max_val = range
+        if not isinstance(min_val, (int, float)) or not isinstance(max_val, (int, float)):
+            raise ValueError("Range values must be numbers.")
+        if min_val >= max_val:
+            raise ValueError("Range min_val must be less than max_val.")
+        self.range = (float(min_val), float(max_val))
+        return
+
+    def current(self):
+        """
+        Get the current annealing multiplier/weight for the current step.
+        
+        Returns:
+            float: The current annealing weight in the specified range.
+        """
+        return self._slope()
+
+
+    def _slope(self):
+        # If we're in the stay-at-max period, return max value
+        if self.current_step >= self.total_steps:
+            y = 1.0
+        else:
+            # Normal annealing calculation
+            if self.shape == 'linear':
+                y = (self.current_step / self.total_steps)
+            elif self.shape == 'cosine':
+                y = (math.cos(math.pi * (self.current_step / self.total_steps - 1)) + 1) / 2
+            elif self.shape == 'logistic':
+                exponent = ((self.total_steps / 2) - self.current_step)
+                y = 1 / (1 + math.exp(exponent))
+            else:
+                y = 1.0
+        
+        y = self._scale_to_range(y)
+        return y
+
+    def _scale_to_range(self, y):
+        """Scale normalized value (0-1) to the specified range"""
+        min_val, max_val = self.range
+        y_out = y * (max_val - min_val) + min_val
+        return y_out

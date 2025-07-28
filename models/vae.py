@@ -11,15 +11,14 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, TensorDataset
 
 import osu.dataset as dataset
+from .annealer import Annealer
 
-# Global VAE configuration  
-LATENT_DIM = 64
-DEFAULT_BETA = 1
-
+# Global VAE configuration
+LATENT_DIM = 48
 
 class ReplayEncoder(nn.Module):
     """Encode replay sequence to latent representation"""
-    def __init__(self, input_size, latent_dim=32):
+    def __init__(self, input_size, latent_dim=32, noise_std=0.0):
         super().__init__()
         
         # Beatmap features + cursor positions
@@ -28,6 +27,7 @@ class ReplayEncoder(nn.Module):
         self.lstm = nn.LSTM(combined_size, 128, num_layers=2, batch_first=True, dropout=0.2)
         
         self.dense1 = nn.Linear(128, 128)
+        self.noise_std = noise_std
         self.dense2 = nn.Linear(128, 64)
         
         # Output layers for reparameterization trick
@@ -35,6 +35,11 @@ class ReplayEncoder(nn.Module):
         self.logvar_layer = nn.Linear(64, latent_dim)
         
     def forward(self, beatmap_features, positions):
+        # gaussian noise during training
+        if self.training and self.noise_std > 0:
+            noise = torch.randn_like(positions) * self.noise_std
+            positions = positions + noise
+
         # Combine inputs
         x = torch.cat([beatmap_features, positions], dim=-1)
         
@@ -43,6 +48,7 @@ class ReplayEncoder(nn.Module):
         h = h_n[-1]  # Use last hidden state
         
         h = F.relu(self.dense1(h))
+            
         h = F.relu(self.dense2(h))
         
         # Output mean and log variance for reparameterization trick
@@ -61,14 +67,13 @@ class ReplayDecoder(nn.Module):
         # beatmap features + latent code
         combined_size = input_size + latent_dim
         
-        # Symmetric LSTM capacity to encoder
-        self.lstm = nn.LSTM(combined_size, 128, num_layers=2, batch_first=True, dropout=0.2)
+        # Symmetric layers to encoder (not really almost)
+        self.lstm = nn.LSTM(combined_size, 96, num_layers=2, batch_first=True, dropout=0.3)
 
-        # Symmetric dense layers to encoder
-        self.dense1 = nn.Linear(128, 128)
-        self.dense2 = nn.Linear(128, 64)
+        self.dense1 = nn.Linear(96, 96)
+        self.dense2 = nn.Linear(96, 48)
 
-        self.output_layer = nn.Linear(64, 2)  # x, y positions
+        self.output_layer = nn.Linear(48, 2)  # x, y positions
         
     def forward(self, beatmap_features, latent_code):
         batch_size, seq_len, _ = beatmap_features.shape
@@ -81,7 +86,6 @@ class ReplayDecoder(nn.Module):
         
         lstm_out, _ = self.lstm(x)
         
-        # Apply same layer structure as encoder
         features = F.relu(self.dense1(lstm_out))
         features = F.relu(self.dense2(features))
 
@@ -91,15 +95,20 @@ class ReplayDecoder(nn.Module):
 
 
 class OsuReplayVAE:
-    def __init__(self, batch_size=64, device=None, latent_dim=None, beta=None):
+    def __init__(self, annealer: Annealer=None, batch_size=64, device=None, latent_dim=None, noise_std=0.0):
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.batch_size = batch_size
         self.latent_dim = latent_dim or LATENT_DIM
-        self.beta = beta or DEFAULT_BETA  # weight for KL divergence
         self.input_size = len(dataset.INPUT_FEATURES)
+        self.annealer = annealer or Annealer(
+            total_steps=10,
+            range=(0, 0.001),
+            cyclical=True,
+            stay_max_steps=5
+        )
 
-        # Initialize models
-        self.encoder = ReplayEncoder(self.input_size, self.latent_dim)
+        self.noise_std = noise_std
+        self.encoder = ReplayEncoder(self.input_size, self.latent_dim, noise_std)
         self.decoder = ReplayDecoder(self.input_size, self.latent_dim)
 
         self.encoder.to(self.device)
@@ -119,15 +128,12 @@ class OsuReplayVAE:
         self.recon_losses = []
         self.kl_losses = []
 
-
-        # Data loaders (will be set by load_data)
         self.train_loader = None
         self.test_loader = None
 
-        print(f"VAE Models initialized on {self.device}")
+        print(f"VAE Models initialized on {self.device} (noise_std={noise_std})")
         print(f"Encoder parameters: {sum(p.numel() for p in self.encoder.parameters() if p.requires_grad)}")
         print(f"Decoder parameters: {sum(p.numel() for p in self.decoder.parameters() if p.requires_grad)}")
-        print(f"Beta: {self.beta}")
 
     def load_data(self, input_data, output_data, test_size=0.2):
         """Load data - splits output_data internally to use only position data (x, y)"""
@@ -164,21 +170,20 @@ class OsuReplayVAE:
         
         # Decode
         reconstructed = self.decoder(beatmap_features, z)
-        
+
         return reconstructed, mu, logvar
 
     def loss_function(self, reconstructed, original, mu, logvar):
         """VAE loss: reconstruction + KL divergence"""
-        # Reconstruction loss
-        recon_loss = F.mse_loss(reconstructed, original, reduction='mean')
+        # Reconstruction loss (sum reduction for proper VAE training)
+        recon_loss = F.mse_loss(reconstructed, original, reduction='sum')
         
-        # KL divergence loss
-        kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-        kl_loss /= original.shape[0]
+        kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+        kld /= original.shape[0]
+
+        total_loss = recon_loss + self.annealer(kld)
         
-        total_loss = recon_loss + self.beta * kl_loss
-        
-        return total_loss, recon_loss, kl_loss
+        return total_loss, recon_loss, kld
 
     def train(self, epochs: int):
         if self.train_loader is None:
@@ -189,7 +194,10 @@ class OsuReplayVAE:
             epoch_recon_loss = 0
             epoch_kl_loss = 0
 
-            for batch_x, batch_y_pos in tqdm.tqdm(self.train_loader, desc=f'Epoch {epoch + 1}/{epochs} (VAE)'):
+            for batch_x, batch_y_pos in tqdm.tqdm(
+                self.train_loader,
+                desc=f'Epoch {epoch + 1}/{epochs} (Beta: {self.annealer.current()})'
+            ):
                 batch_x = batch_x.to(self.device)
                 batch_y_pos = batch_y_pos.to(self.device)
 
@@ -220,6 +228,8 @@ class OsuReplayVAE:
             self.kl_losses.append(avg_kl_loss)
 
             print(f'Epoch {epoch + 1}/{epochs}, Total: {avg_total_loss:.4f}, Recon: {avg_recon_loss:.4f}, KL: {avg_kl_loss:.4f}')
+
+            self.annealer.step()
 
     def generate(self, beatmap_data, num_samples=1, apply_bias_correction=True):
         """Generate position data - returns (x, y) positions"""

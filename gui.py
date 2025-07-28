@@ -15,9 +15,9 @@ import osu.dataset as dataset
 import osu.rulesets.beatmap as bm
 from osu.rulesets.mods import Mods
 import osu.client.controller as controller
-from osu.vae import OsuReplayVAE
-from osu.rnn import OsuReplayRNN
-from osu.keys import OsuKeyModel
+from models.vae import OsuReplayVAE
+from models.rnn import OsuReplayRNN
+from models.keys import OsuKeyModel
 from osu.rulesets.core import OSU_PATH
 from PIL import Image, ImageFilter, ImageEnhance
 import numpy as np

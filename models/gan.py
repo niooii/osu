@@ -10,7 +10,7 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, TensorDataset
 
 import osu.dataset as dataset
-from osu.model import PosModel, KeyModel
+from .model import PosModel, KeyModel
 
 
 class Generator(nn.Module):
