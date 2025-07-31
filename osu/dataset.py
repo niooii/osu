@@ -22,6 +22,7 @@ INPUT_FEATURES = [
     'time_until_click', # in seconds
     'is_slider', # bool
     'is_spinner', # bool
+    'is_note', # bool
     'cs', # normalized from 0-1 (cs value / 10)
     'slider_speed', # (slider pixel len / duration)
     'slider_len' # osu pixel len / 600
@@ -70,6 +71,7 @@ class PrecomputedBeatmapData:
                 'type': type(obj).__name__,
                 'is_slider': isinstance(obj, hitobjects.Slider),
                 'is_spinner': isinstance(obj, hitobjects.Spinner),
+                'is_note': not isinstance(obj, hitobjects.Slider) and not isinstance(obj, hitobjects.Spinner),
                 'obj_ref': obj,  # Cache object reference to avoid linear searches
             }
             
@@ -121,8 +123,9 @@ class PrecomputedBeatmapData:
     def _build_time_indexed_lookups(self):
         import bisect
         
-        # Separate sliders and regular objects, sort by time
+        # Separate sliders, spinners and regular objects, sort by time
         self.slider_intervals = []  # (start_time, end_time, obj_data)
+        self.spinner_intervals = [] # (start_time, end_time, obj_data)  
         self.sorted_objects = []    # (time, obj_data) sorted by time
         
         for obj_data in self.hit_objects_data:
@@ -131,16 +134,24 @@ class PrecomputedBeatmapData:
                 start_time = obj_data['time']
                 end_time = start_time + obj_data['precomputed_duration']
                 self.slider_intervals.append((start_time, end_time, obj_data))
+            elif obj_data['is_spinner']:
+                # Build spinner intervals for active spinner lookup
+                start_time = obj_data['time']
+                spinner_obj = obj_data['obj_ref']
+                end_time = spinner_obj.end_time
+                self.spinner_intervals.append((start_time, end_time, obj_data))
             
             # Add all objects to sorted list for upcoming object lookup
             self.sorted_objects.append((obj_data['time'], obj_data))
         
         # Sort for binary search
         self.slider_intervals.sort(key=lambda x: x[0])  # Sort by start time
+        self.spinner_intervals.sort(key=lambda x: x[0]) # Sort by start time
         self.sorted_objects.sort(key=lambda x: x[0])    # Sort by time
         
         # Pre-build sorted time arrays for efficient binary search (avoid creating new lists 612K times)
         self.slider_start_times = [interval[0] for interval in self.slider_intervals]
+        self.spinner_start_times = [interval[0] for interval in self.spinner_intervals]
         self.object_times = [obj[0] for obj in self.sorted_objects]
     
     def _precompute_all_frames(self):
@@ -165,7 +176,18 @@ class PrecomputedBeatmapData:
                 
                 # Calculate position using cached method to avoid redundant Bezier calculations
                 px, py = self._cached_target_position(obj, time, beat_duration, self.slider_multiplier)
-                time_left = obj_data['time'] - time
+
+                if obj_data['is_spinner']:
+                    # for spinners the time_left is different
+                    if time > obj_data['time']:
+                        # the spinner is ACTIVE (should be spun), increase time_left by 0.1x
+                        # of the time passed since started (spinners can last quite long)
+                        time_left = 0.1 * (time - obj_data['time'])
+                    else:
+                        # the spinner is not yet active proceed as normal
+                        time_left = obj_data['time'] - time
+                else:
+                    time_left = obj_data['time'] - time
 
                 if obj_data['is_slider']:
                     slider_speed = obj_data.get('precomputed_slider_speed', DEFAULT_SLIDER_SPEED)
@@ -177,7 +199,7 @@ class PrecomputedBeatmapData:
                 # Store pre-computed frame data as tuple for memory efficiency
                 frame_cache[time] = (
                     px, py, time_left,
-                    int(obj_data['is_slider']), int(obj_data['is_spinner']),
+                    int(obj_data['is_slider']), int(obj_data['is_spinner']), int(obj_data['is_note']),
                     self.circle_size, slider_speed, slider_len
                 )
             else:
@@ -186,7 +208,7 @@ class PrecomputedBeatmapData:
         return frame_cache
     
     def _find_visible_objects_at_time(self, time):
-        """Find active objects at given time - prioritizes currently playing sliders"""
+        """Find active objects at given time - prioritizes currently playing sliders, then spinners"""
         import bisect
         
         # check for active sliders using binary search
@@ -205,8 +227,23 @@ class PrecomputedBeatmapData:
             active_sliders.sort(key=lambda x: x['time'])
             return active_sliders[:1]
         
-        # if no active sliders, find upcoming visible objects using binary search
-        visible = []
+        # check for active spinners using binary search
+        active_spinners = []
+        
+        # binary search for spinners that could be active at this time
+        left_idx = bisect.bisect_right(self.spinner_start_times, time)
+        
+        # Check spinners that start before or at current time
+        for i in range(left_idx):
+            start_time, end_time, obj_data = self.spinner_intervals[i]
+            if start_time <= time <= end_time:
+                active_spinners.append(obj_data)
+        
+        if active_spinners:
+            active_spinners.sort(key=lambda x: x['time'])
+            return active_spinners[:1]
+        
+        # if no active sliders or spinners, find upcoming visible objects using binary search
         time_end = time + self.preempt
         
         # binary search for objects in time range [time, time + preempt] (using pre-built array)
@@ -243,61 +280,52 @@ class PrecomputedBeatmapData:
 # m1 and m2 into k1 and k2 respectively.
 OUTPUT_FEATURES = ['x', 'y', 'k1', 'k2']
 
-# Default beatmap frame information
-_DEFAULT_BEATMAP_FRAME = (
-    osu_core.SCREEN_WIDTH / 2, osu_core.SCREEN_HEIGHT / 2,  # x, y
-    MAX_TIME_UNTIL_CLICK, False, False,  # time_until_click (seconds), is_slider, is_spinner
+# Default frame (raw coordinates - will be normalized later)
+_DEFAULT_FRAME = (
+    osu_core.SCREEN_WIDTH / 2, osu_core.SCREEN_HEIGHT / 2,  # x, y (raw coordinates)
+    MAX_TIME_UNTIL_CLICK, False, False, False,  # time_until_click (seconds), is_slider, is_spinner, is_note
     DEFAULT_CS, DEFAULT_SLIDER_SPEED,
     DEFAULT_SLIDER_LEN
 )
 
+# Default frame for padding
+_DEFAULT_NORMALIZED_FRAME = (
+    0.0, 0.0,  # x, y (normalized center: (256/512 - 0.5) = 0.0, (192/384 - 0.5) = 0.0)
+    MAX_TIME_UNTIL_CLICK, False, False, False,  # time_until_click, is_slider, is_spinner, is_note
+    DEFAULT_CS, DEFAULT_SLIDER_SPEED,
+    DEFAULT_SLIDER_LEN
+)
 
-def pt_pad_sequences(data, maxlen, value=_DEFAULT_BEATMAP_FRAME):
+def pad_map_frames(data, maxlen):
+    """Pad beatmap sequences (9 features) with default beatmap frame"""
     if not data:
         return np.array([])
     
-    # Convert each sequence to numpy array (equivalent to torch.tensor step)
-    arrays = []
-    for seq in data:
-        if seq:  # non-empty sequence
-            arrays.append(np.stack(seq).astype(np.float32))
-        else:  # empty sequence
-            # Determine feature dimension from other sequences
-            feature_dim = None
-            for other_seq in data:
-                if other_seq:
-                    feature_dim = len(other_seq[0])
-                    break
-            if feature_dim is None:
-                # All sequences empty - use value to determine feature dim
-                feature_dim = len(value) if hasattr(value, '__len__') else 8
-            arrays.append(np.empty((0, feature_dim), dtype=np.float32))
+    batch_size = len(data)
+    result = np.full((batch_size, maxlen, 9), _DEFAULT_NORMALIZED_FRAME, dtype=np.float32)
     
-    if not arrays:
+    for i, seq in enumerate(data):
+        if seq:
+            seq_array = np.stack(seq).astype(np.float32)
+            seq_len = min(len(seq), maxlen)
+            result[i, :seq_len] = seq_array[:seq_len]
+    
+    return result
+
+
+def pad_play_frames(data, maxlen):
+    """Pad replay sequences (4 features: x, y, k1, k2) with zeros"""
+    if not data:
         return np.array([])
     
-    # Get dimensions
-    max_seq_len = max(arr.shape[0] for arr in arrays)
-    num_features = arrays[0].shape[1]
-    batch_size = len(arrays)
+    batch_size = len(data)
+    result = np.zeros((batch_size, maxlen, 4), dtype=np.float32)
     
-    # Step 1: Equivalent to pad_sequence - pad all sequences to max_seq_len
-    padded = np.full((batch_size, max_seq_len, num_features), value, dtype=np.float32)
-    for i, arr in enumerate(arrays):
-        if arr.shape[0] > 0:
-            padded[i, :arr.shape[0]] = arr
-    
-    # Step 2: Trim or pad to exact maxlen (equivalent to torch.nn.functional.pad)
-    if max_seq_len > maxlen:
-        # Trim to maxlen
-        result = padded[:, :maxlen]
-    elif max_seq_len < maxlen:
-        # Pad to maxlen 
-        extra_frames = maxlen - max_seq_len
-        extra_padding = np.full((batch_size, extra_frames, num_features), value, dtype=np.float32)
-        result = np.concatenate([padded, extra_padding], axis=1)
-    else:
-        result = padded
+    for i, seq in enumerate(data):
+        if seq:
+            seq_array = np.stack(seq).astype(np.float32)
+            seq_len = min(len(seq), maxlen)
+            result[i, :seq_len] = seq_array[:seq_len]
     
     return result
 
@@ -386,7 +414,7 @@ def target_data(dataset: pd.DataFrame, verbose=False):
         if len(chunk) > 0:
             target_data.append(chunk)
 
-    data = pt_pad_sequences(target_data, maxlen=BATCH_LENGTH, value=0)
+    data = pad_play_frames(target_data, maxlen=BATCH_LENGTH)
     index = pd.MultiIndex.from_product([range(len(data)), range(BATCH_LENGTH)], names=['chunk', 'frame'])
     return pd.DataFrame(np.reshape(data, (-1, len(OUTPUT_FEATURES))), index=index, columns=OUTPUT_FEATURES,
                         dtype=np.float32)
@@ -429,39 +457,22 @@ def get_beatmap_time_data(beatmap: osu_beatmap.Beatmap) -> []:
     
     data = []
     chunk = []
-    last_ok_frame = None
 
     for time in range(beatmap.start_offset(), beatmap.length(), FRAME_RATE):
         # O(1) lookup
         frame_data = precomputed.get_frame_data(time)
 
         if frame_data is None:
-            if last_ok_frame is None:
-                frame = _DEFAULT_BEATMAP_FRAME
-            else:
-                frame = list(last_ok_frame)
-                frame[2] = MAX_TIME_UNTIL_CLICK
+            # Use default frame and normalize coordinates
+            px_raw, py_raw, time_until_click, is_slider, is_spinner, is_note, circle_size, slider_speed, slider_len = _DEFAULT_FRAME
         else:
             # Unpack precomputed tuple data for faster access
-            px_raw, py_raw, time_left, is_slider, is_spinner, circle_size, slider_speed, slider_len = frame_data
-            
-            # Convert to normalized coordinates
-            px = max(0, min(px_raw / osu_core.SCREEN_WIDTH, 1))
-            py = max(0, min(py_raw / osu_core.SCREEN_HEIGHT, 1))
+            px_raw, py_raw, time_left, is_slider, is_spinner, is_note, circle_size, slider_speed, slider_len = frame_data
             time_until_click = max(0, min(time_left / 1000, MAX_TIME_UNTIL_CLICK))
-            
-            frame = (
-                px, py,
-                time_until_click,
-                is_slider,
-                is_spinner,
-                circle_size,
-                slider_speed,
-                slider_len
-            )
-            last_ok_frame = frame
-
-        px, py, time_until_click, is_slider, is_spinner, circle_size, slider_speed, slider_len = frame
+        
+        # Always normalize coordinates consistently
+        px = max(0, min(px_raw / osu_core.SCREEN_WIDTH, 1))
+        py = max(0, min(py_raw / osu_core.SCREEN_HEIGHT, 1))
 
         chunk.append(np.array([
             px - 0.5,
@@ -469,6 +480,7 @@ def get_beatmap_time_data(beatmap: osu_beatmap.Beatmap) -> []:
             time_until_click,
             is_slider,
             is_spinner,
+            is_note,
             circle_size,
             slider_speed,
             slider_len
@@ -502,7 +514,7 @@ def input_data(dataset, verbose=False) -> pd.DataFrame:
         if chunks is not None:
             data.extend(chunks)
 
-    data = pt_pad_sequences(data, maxlen=BATCH_LENGTH, value=0)
+    data = pad_map_frames(data, maxlen=BATCH_LENGTH)
 
     index = pd.MultiIndex.from_product([
         range(len(data)), range(BATCH_LENGTH)
