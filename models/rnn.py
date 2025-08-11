@@ -24,7 +24,6 @@ class OsuReplayRNN:
         self.pos_model = PosModel(self.input_size, noise_std)
         self.pos_model.to(self.device)
         
-        # Compile model for faster training
         if hasattr(torch, 'compile'):
             self.pos_model = torch.compile(self.pos_model)
             print("Position model compiled with torch.compile")

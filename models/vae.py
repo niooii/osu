@@ -298,49 +298,6 @@ class OsuReplayVAE:
         self.decoder.train()
 
         return pos.cpu().numpy()
-    #
-    # def compute_coordinate_bias(self, n_samples=100):
-    #     """Compute coordinate bias by comparing generated vs training data"""
-    #     if self.train_loader is None:
-    #         print("No training data loaded")
-    #         return
-    #
-    #     self.encoder.eval()
-    #     self.decoder.eval()
-    #
-    #     training_positions = []
-    #     generated_positions = []
-    #
-    #     with torch.no_grad():
-    #         for i, (batch_x, batch_y_pos) in enumerate(self.train_loader):
-    #             if i >= n_samples // self.batch_size:
-    #                 break
-    #
-    #             batch_x = batch_x.to(self.device)
-    #             batch_y_pos = batch_y_pos.to(self.device)
-    #
-    #             # Store training positions
-    #             training_positions.append(batch_y_pos.cpu().numpy())
-    #
-    #             # Create windowed features for generation
-    #             windowed_features = self.create_windowed_features(batch_x)
-    #
-    #             # Generate with random latent codes
-    #             z = torch.randn(batch_x.shape[0], self.latent_dim, device=self.device)
-    #             generated = self.decoder(windowed_features, z)
-    #             generated_positions.append(generated.cpu().numpy())
-    #
-    #     training_mean = np.concatenate(training_positions, axis=0).mean(axis=(0, 1))
-    #     generated_mean = np.concatenate(generated_positions, axis=0).mean(axis=(0, 1))
-    #
-    #     self.coordinate_bias = generated_mean - training_mean
-    #
-    #     print(f"Coordinate bias computed: ({self.coordinate_bias[0]:.6f}, {self.coordinate_bias[1]:.6f})")
-    #
-    #     self.encoder.train()
-    #     self.decoder.train()
-    #
-    #     return self.coordinate_bias
 
     def plot_losses(self):
         plt.figure(figsize=(15, 5))
