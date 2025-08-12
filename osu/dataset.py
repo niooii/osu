@@ -562,3 +562,85 @@ def replay_mapping_from_cache(limit: int = None, shuffle: bool = False) -> pd.Da
     df = pd.DataFrame(rows, columns=['replay', 'beatmap'])
 
     return load(df)
+
+
+def user_replay_mapping_from_cache(user_id: int, score_type: str = None, limit: int = None, shuffle: bool = False) -> pd.DataFrame:
+    """Load user-specific replays from cache directory .data/replays-{user_id}/
+    
+    Args:
+        user_id: User ID to load replays for
+        score_type: Optional filter for score type ('best', 'recent', 'firsts'). If None, loads all types.
+        limit: Optional limit on number of replays to load
+        shuffle: Whether to shuffle the replay order
+    """
+    replay_cache_path = f'.data/replays-{user_id}'
+    
+    if not os.path.exists(replay_cache_path):
+        print(f"Cache directory for user {user_id} not found: {replay_cache_path}")
+        return pd.DataFrame(columns=['replay', 'beatmap'])
+
+    files = os.listdir(replay_cache_path)
+    metafiles = [f for f in files if f.endswith('.meta')]
+
+    if shuffle:
+        random.shuffle(metafiles)
+
+    rows = []
+    i = 0
+    
+    for path in tqdm.tqdm(metafiles, desc=f'Loading user {user_id} replay metadata', total=limit or len(metafiles)):
+        if limit is not None and i == limit:
+            break
+
+        metafile_path = os.path.join(replay_cache_path, path)
+        replay_path = metafile_path.replace('.meta', '.osr')
+
+        # Check if replay file exists
+        if not os.path.exists(replay_path):
+            continue
+
+        with open(metafile_path, 'r') as metafile:
+            meta_json = json.loads(metafile.read())
+
+        # Filter by score_type if specified
+        if score_type is not None and meta_json.get('score_type') != score_type:
+            continue
+
+        # Find corresponding beatmap file using beatmapset_id and beatmap_id
+        beatmapset_id = meta_json.get('beatmapset_id')
+        beatmap_id = meta_json.get('beatmap_id')
+        beatmap_path = None
+        
+        if beatmapset_id is not None:
+            songs_cache_path = '.data/songs'
+            if os.path.exists(songs_cache_path):
+                # Find beatmapset directory
+                beatmapset_dirs = [d for d in os.listdir(songs_cache_path) 
+                                 if d.startswith(str(beatmapset_id)) and os.path.isdir(os.path.join(songs_cache_path, d))]
+                
+                if beatmapset_dirs:
+                    beatmapset_dir = os.path.join(songs_cache_path, beatmapset_dirs[0])
+                    
+                    # Find .osu files in the beatmapset
+                    osu_files = [f for f in os.listdir(beatmapset_dir) if f.endswith('.osu')]
+                    
+                    if beatmap_id is not None:
+                        # Try to find the specific beatmap by ID (beatmaps usually have ID in filename)
+                        for osu_file in osu_files:
+                            if str(beatmap_id) in osu_file:
+                                beatmap_path = os.path.join(beatmapset_dir, osu_file)
+                                break
+                    
+                    # If not found by ID, take the first .osu file as fallback
+                    if beatmap_path is None and osu_files:
+                        beatmap_path = os.path.join(beatmapset_dir, osu_files[0])
+
+        rows.append((replay_path, beatmap_path))
+        i += 1
+
+    df = pd.DataFrame(rows, columns=['replay', 'beatmap'])
+    
+    # Filter out rows where beatmap_path is None if we want complete pairs only
+    # df = df.dropna(subset=['beatmap'])
+    
+    return load(df)
