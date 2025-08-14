@@ -21,13 +21,11 @@ dependencies = [
     "pygame>=2.6.1",
     "pymem>=1.14.0",
     "python-dotenv>=1.1.1",
-    "pywin32>=310",
     "scikit-learn>=1.7.0",
     "tqdm>=4.67.1",
     "torch>=2.7.0",
     "torchvision>=0.22.0",
     "keyboard>=0.13.5",
-    "triton-windows>=3.3.1.post19",
 ]
 
 [[tool.uv.index]]
