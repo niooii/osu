@@ -1,20 +1,15 @@
-import os
-import datetime
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-import numpy as np
-import matplotlib.pyplot as plt
 import tqdm
-from sklearn.model_selection import train_test_split
-from torch.utils.data import DataLoader, TensorDataset
 
 import osu.dataset as dataset
 from .annealer import Annealer
+from .base import OsuModel
 
 # Global VAE configuration
-LATENT_DIM = 48
+LATENT_DIM = 32
 FUTURE_FRAMES = 70
 PAST_FRAMES = 20
 
@@ -107,48 +102,41 @@ class ReplayDecoder(nn.Module):
         return positions
 
 
-class OsuReplayVAE:
+class OsuReplayVAE(OsuModel):
     def __init__(self, annealer: Annealer = None, batch_size=64, device=None, latent_dim=None, noise_std=0.0):
-        self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.batch_size = batch_size
+        # Store VAE-specific parameters before calling super().__init__
         self.latent_dim = latent_dim or LATENT_DIM
-        self.input_size = len(dataset.INPUT_FEATURES)
+        self.noise_std = noise_std
         self.annealer = annealer or Annealer(
             total_steps=10,
             range=(0, 0.001),
             cyclical=True,
             stay_max_steps=5
         )
-
-        self.noise_std = noise_std
-        self.encoder = ReplayEncoder(self.input_size, self.latent_dim, noise_std,
+        
+        # Call parent constructor which will call our abstract methods
+        super().__init__(batch_size=batch_size, device=device, 
+                        latent_dim=self.latent_dim, noise_std=noise_std, annealer=self.annealer)
+    
+    def _initialize_models(self, **kwargs):
+        """Initialize VAE encoder and decoder models."""
+        self.encoder = ReplayEncoder(self.input_size, self.latent_dim, self.noise_std,
                                      past_frames=PAST_FRAMES, future_frames=FUTURE_FRAMES)
         self.decoder = ReplayDecoder(self.input_size, self.latent_dim,
                                      past_frames=PAST_FRAMES, future_frames=FUTURE_FRAMES)
-
-        self.encoder.to(self.device)
-        self.decoder.to(self.device)
-
-        if hasattr(torch, 'compile'):
-            self.encoder = torch.compile(self.encoder)
-            self.decoder = torch.compile(self.decoder)
-            print("VAE models compiled..")
-
-        # Optimizer
+    
+    def _initialize_optimizers(self):
+        """Initialize VAE optimizer for both encoder and decoder."""
         params = list(self.encoder.parameters()) + list(self.decoder.parameters())
         self.optimizer = optim.AdamW(params, lr=0.001, betas=(0.9, 0.999), weight_decay=0.001)
-
-        # Training history
-        self.total_losses = []
-        self.recon_losses = []
-        self.kl_losses = []
-
-        self.train_loader = None
-        self.test_loader = None
-
-        print(f"VAE Models initialized on {self.device} (noise_std={noise_std})")
-        print(f"Encoder parameters: {sum(p.numel() for p in self.encoder.parameters() if p.requires_grad)}")
-        print(f"Decoder parameters: {sum(p.numel() for p in self.decoder.parameters() if p.requires_grad)}")
+    
+    def _extract_target_data(self, output_data):
+        """Extract position data (x, y) from output data for VAE training."""
+        return output_data[:, :, :2]  # Take first 2 features (x, y)
+    
+    def _get_target_data_name(self):
+        """Return description of target data type."""
+        return "position only"
 
     def create_windowed_features(self, beatmap_features):
         """Convert sequential features to windowed features"""
@@ -170,24 +158,50 @@ class OsuReplayVAE:
 
         return torch.stack(windows, dim=1)
 
-    def load_data(self, input_data, output_data, test_size=0.2):
-        """Load data - splits output_data internally to use only position data (x, y)"""
-        # Extract only position data (x, y) from output_data
-        position_data = output_data[:, :, :2]  # Take first 2 features (x, y)
+    def _train_epoch(self, epoch, total_epochs, **kwargs):
+        """Train VAE for one epoch."""
+        epoch_total_loss = 0
+        epoch_recon_loss = 0
+        epoch_kl_loss = 0
 
-        # Train/test split
-        x_train, x_test, y_train, y_test = train_test_split(
-            input_data, position_data, test_size=test_size, random_state=42
-        )
+        for batch_x, batch_y_pos in tqdm.tqdm(
+                self.train_loader,
+                desc=f'Epoch {epoch + 1}/{total_epochs} (Beta: {self.annealer.current()})'
+        ):
+            batch_x = batch_x.to(self.device)
+            batch_y_pos = batch_y_pos.to(self.device)
 
-        # Create DataLoaders
-        train_dataset = TensorDataset(torch.FloatTensor(x_train), torch.FloatTensor(y_train))
-        test_dataset = TensorDataset(torch.FloatTensor(x_test), torch.FloatTensor(y_test))
+            self.optimizer.zero_grad()
 
-        self.train_loader = DataLoader(train_dataset, batch_size=self.batch_size, shuffle=True)
-        self.test_loader = DataLoader(test_dataset, batch_size=self.batch_size, shuffle=False)
+            # Forward pass
+            reconstructed, mu, logvar = self.forward(batch_x, batch_y_pos)
 
-        print(f"Data loaded: {len(train_dataset)} training samples, {len(test_dataset)} test samples (position only)")
+            # Compute loss
+            total_loss, recon_loss, kl_loss = self.loss_function(reconstructed, batch_y_pos, mu, logvar)
+
+            # Backward pass
+            total_loss.backward()
+            torch.nn.utils.clip_grad_norm_(list(self.encoder.parameters()) + list(self.decoder.parameters()),
+                                           max_norm=1.0)
+            self.optimizer.step()
+
+            epoch_total_loss += total_loss.item()
+            epoch_recon_loss += recon_loss.item()
+            epoch_kl_loss += kl_loss.item()
+
+        # Calculate average losses
+        avg_total_loss = epoch_total_loss / len(self.train_loader)
+        avg_recon_loss = epoch_recon_loss / len(self.train_loader)
+        avg_kl_loss = epoch_kl_loss / len(self.train_loader)
+
+        # Step the annealer
+        self.annealer.step()
+
+        return {
+            'total_loss': avg_total_loss,
+            'recon_loss': avg_recon_loss,
+            'kl_loss': avg_kl_loss
+        }
 
     def reparameterize(self, mu, logvar):
         """Reparameterization trick for backpropagation through sampling"""
@@ -223,58 +237,25 @@ class OsuReplayVAE:
 
         return total_loss, recon_loss, kld
 
-    def train(self, epochs: int):
-        if self.train_loader is None:
-            raise ValueError("No data loaded. Call load_data() first.")
-
-        for epoch in range(epochs):
-            epoch_total_loss = 0
-            epoch_recon_loss = 0
-            epoch_kl_loss = 0
-
-            for batch_x, batch_y_pos in tqdm.tqdm(
-                    self.train_loader,
-                    desc=f'Epoch {epoch + 1}/{epochs} (Beta: {self.annealer.current()})'
-            ):
-                batch_x = batch_x.to(self.device)
-                batch_y_pos = batch_y_pos.to(self.device)
-
-                self.optimizer.zero_grad()
-
-                # Forward pass
-                reconstructed, mu, logvar = self.forward(batch_x, batch_y_pos)
-
-                # Compute loss
-                total_loss, recon_loss, kl_loss = self.loss_function(reconstructed, batch_y_pos, mu, logvar)
-
-                # Backward pass
-                total_loss.backward()
-                torch.nn.utils.clip_grad_norm_(list(self.encoder.parameters()) + list(self.decoder.parameters()),
-                                               max_norm=1.0)
-                self.optimizer.step()
-
-                epoch_total_loss += total_loss.item()
-                epoch_recon_loss += recon_loss.item()
-                epoch_kl_loss += kl_loss.item()
-
-            # Calculate average losses
-            avg_total_loss = epoch_total_loss / len(self.train_loader)
-            avg_recon_loss = epoch_recon_loss / len(self.train_loader)
-            avg_kl_loss = epoch_kl_loss / len(self.train_loader)
-
-            self.total_losses.append(avg_total_loss)
-            self.recon_losses.append(avg_recon_loss)
-            self.kl_losses.append(avg_kl_loss)
-
-            print(
-                f'Epoch {epoch + 1}/{epochs}, Total: {avg_total_loss:.4f}, Recon: {avg_recon_loss:.4f}, KL: {avg_kl_loss:.4f}')
-
-            self.annealer.step()
+    def _get_state_dict(self):
+        """Get state dictionary for saving VAE model."""
+        return {
+            'encoder': self.encoder.state_dict(),
+            'decoder': self.decoder.state_dict(),
+            'latent_dim': self.latent_dim,
+            'input_size': self.input_size,
+            'past_frames': PAST_FRAMES,
+            'future_frames': FUTURE_FRAMES
+        }
+    
+    def _load_state_dict(self, checkpoint):
+        """Load state dictionary for VAE model."""
+        self.encoder.load_state_dict(checkpoint['encoder'])
+        self.decoder.load_state_dict(checkpoint['decoder'])
 
     def generate(self, beatmap_data, num_samples=1, apply_bias_correction=True):
         """Generate position data - returns (x, y) positions"""
-        self.encoder.eval()
-        self.decoder.eval()
+        self._set_eval_mode()
 
         with torch.no_grad():
             beatmap_tensor = torch.FloatTensor(beatmap_data).to(self.device)
@@ -294,123 +275,23 @@ class OsuReplayVAE:
             if apply_bias_correction and hasattr(self, 'coordinate_bias'):
                 pos = pos - torch.tensor(self.coordinate_bias, device=self.device)
 
-        self.encoder.train()
-        self.decoder.train()
+        self._set_train_mode()
 
         return pos.cpu().numpy()
 
-    def plot_losses(self):
-        plt.figure(figsize=(15, 5))
 
-        # Total losses
-        plt.subplot(1, 3, 1)
-        plt.plot(self.total_losses, label='Total Loss')
-        plt.xlabel('Epoch')
-        plt.ylabel('Loss')
-        plt.title('Total Loss')
-        plt.legend()
-
-        # Reconstruction loss
-        plt.subplot(1, 3, 2)
-        plt.plot(self.recon_losses, label='Reconstruction Loss', color='orange')
-        plt.xlabel('Epoch')
-        plt.ylabel('Loss')
-        plt.title('Reconstruction Loss')
-        plt.legend()
-
-        # KL divergence loss
-        plt.subplot(1, 3, 3)
-        plt.plot(self.kl_losses, label='KL Divergence', color='red')
-        plt.xlabel('Epoch')
-        plt.ylabel('Loss')
-        plt.title('KL Divergence')
-        plt.legend()
-
-        plt.tight_layout()
-        plt.show()
-
-    def save(self, path_prefix=None):
-        if path_prefix is None:
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            path_prefix = f'.trained/vae_{timestamp}'
-
-        if not os.path.exists('.trained'):
-            os.makedirs('.trained')
-
-        # Save both models
-        torch.save({
-            'encoder': self.encoder.state_dict(),
-            'decoder': self.decoder.state_dict(),
-            'latent_dim': self.latent_dim,
-            'input_size': self.input_size,
-            'past_frames': PAST_FRAMES,
-            'future_frames': FUTURE_FRAMES
-        }, f'{path_prefix}.pt')
-        torch.save({
-            'encoder': self.encoder.state_dict(),
-            'decoder': self.decoder.state_dict(),
-            'latent_dim': self.latent_dim,
-            'input_size': self.input_size,
-            'past_frames': PAST_FRAMES,
-            'future_frames': FUTURE_FRAMES
-        }, '.trained/vae_most_recent.pt')
-        print(f"VAE models saved to {path_prefix}.pt")
-
-    @staticmethod
-    def load(path, device=None):
+    @classmethod  
+    def load(cls, path, device=None, **kwargs):
+        """Load VAE model from checkpoint."""
         device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-        # Load checkpoint
         checkpoint = torch.load(path, map_location=device)
-
-        # Handle both compiled and non-compiled model state dicts
-        def fix_state_dict(state_dict):
-            """Remove '_orig_mod.' prefix from compiled model keys"""
-            new_state_dict = {}
-            for k, v in state_dict.items():
-                if k.startswith('_orig_mod.'):
-                    new_state_dict[k[10:]] = v  # Remove '_orig_mod.' prefix
-                else:
-                    new_state_dict[k] = v
-            return new_state_dict
-
-        # Create instance
+        
+        # Create instance with saved parameters
         latent_dim = checkpoint.get('latent_dim', LATENT_DIM)
-
-        # check if sliding window model
-        encoder_state = fix_state_dict(checkpoint['encoder'])
-        lstm_weight_shape = encoder_state['lstm.weight_ih_l0'].shape
-        expected_old_size = len(dataset.INPUT_FEATURES) + 2  # old architecture
-
-        if 'past_frames' in checkpoint and 'future_frames' in checkpoint:
-            # New windowed model
-            past_frames = checkpoint['past_frames']
-            future_frames = checkpoint['future_frames']
-            vae = OsuReplayVAE(device=device, latent_dim=latent_dim)
-
-            # Recreate models with correct windowing
-            vae.encoder = ReplayEncoder(vae.input_size, vae.latent_dim, vae.noise_std,
-                                        past_frames=past_frames, future_frames=future_frames)
-            vae.decoder = ReplayDecoder(vae.input_size, vae.latent_dim,
-                                        past_frames=past_frames, future_frames=future_frames)
-        elif lstm_weight_shape[1] == expected_old_size:
-            # Old model without windowing
-            raise ValueError(
-                "This appears to be an old model without windowing support. "
-                "Please retrain the model with the new windowed architecture, "
-                "or use the old version of the code to load this model."
-            )
-        else:
-            # Unknown model format
-            raise ValueError(f"Unknown model format. LSTM input size: {lstm_weight_shape[1]}")
-
-        vae.encoder.to(device)
-        vae.decoder.to(device)
-
-        # Load models with fixed state dicts
-        vae.encoder.load_state_dict(fix_state_dict(checkpoint['encoder']))
-        vae.decoder.load_state_dict(fix_state_dict(checkpoint['decoder']))
-        vae.encoder.train()
-        vae.decoder.train()
-        print(f"VAE models loaded from {path}")
+        vae = cls(device=device, latent_dim=latent_dim, **kwargs)
+        
+        # Load state dict and set to eval mode
+        vae._load_state_dict(checkpoint)
+        # vae._set_eval_mode()
+        print(f"VAE loaded from {path}")
         return vae

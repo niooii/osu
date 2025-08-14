@@ -1,6 +1,7 @@
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import shutil
@@ -27,7 +28,7 @@ os.makedirs("../.data/replays", exist_ok=True)
 # TODO we can make this async and then batch the donwloads, but nah im too lazy
 # TODO add cache to map beatmaps to the replays
 def get_replay(
-    score_id: int, map_md5: str, verbose: bool = False
+        score_id: int, map_md5: str, verbose: bool = False
 ) -> (replay.Replay, int):
     save_path = f".data/replays/{score_id}.osr"
     if os.path.exists(save_path):
@@ -76,22 +77,23 @@ def get_replay(
     return (rp, score_id)
 
 
-def download_t50_replays(
-    beatmap: beatmap.Beatmap,
-    cache_map_path: str,
-    map_md5: str,
-    max: int = 50,
-    only: Literal["FC", "S", "ALL"] = "S",
-    verbose: bool = False,
+def download_t100_replays(
+        beatmap: beatmap.Beatmap,
+        cache_map_path: str,
+        map_md5: str,
+        max: int = 50,
+        only: Literal["FC", "S", "ALL"] = "S",
+        by_user_id: int | None = None,
+        verbose: bool = False,
 ) -> list[replay.Replay]:
     retry_times = 0
     beatmap_id = beatmap.beatmap_id()
-    t50_url = f"https://osu.ppy.sh/beatmaps/{beatmap_id}/scores?mode=osu&type=global"
+    t100_url = f"https://osu.ppy.sh/beatmaps/{beatmap_id}/scores?mode=osu&type=global&limit=100"
 
     if not os.path.exists(".data/replays/"):
         os.makedirs(".data/replays/")
 
-    response = requests.get(t50_url)
+    response = requests.get(t100_url)
     if response.status_code // 100 != 2:
         if response.status_code == 404:
             return None
@@ -101,9 +103,13 @@ def download_t50_replays(
 
         while retry_times < 5 and response.status_code // 100 != 2:
             time.sleep(4 * (retry_times + 1))
-            response = requests.get(t50_url)
+            response = requests.get(t100_url)
             if response.status_code == 404:
                 return None
+            elif response.status_code == 429:
+                print("Rate limit reached... trying again in 10 minutes")
+                time.sleep(600)
+                print("Trying again now... :/")
             if response.status_code // 100 == 2:
                 break
             verbose and print(
@@ -120,6 +126,9 @@ def download_t50_replays(
     response = json.loads(response.text)
     scores = response["scores"]
 
+    if by_user_id is not None:
+        scores = [score for score in scores if int(score["user_id"]) == int(by_user_id)]
+
     # we also filter out the ones that had no replay obviously
     replay_ids = []
     for score in scores:
@@ -135,7 +144,11 @@ def download_t50_replays(
     replay_ids = replay_ids[0:max]
 
     # download replays
-    replays = [get_replay(id, map_md5, verbose) for id in replay_ids]
+    if by_user_id is not None:
+        replays = [get_user_replay(id, map_md5, user_id=by_user_id, verbose=verbose) for id in replay_ids]
+    else:
+        replays = [get_replay(id, map_md5, verbose) for id in replay_ids]
+
     replays = [t for t in replays if t is not None]
 
     if replays is None:
@@ -153,11 +166,11 @@ def download_t50_replays(
     return replays
 
 
-def download_local_mapset_t50_replays(
-    mapset_folder: str,
-    verbose: bool = False,
-    filter: None | Callable[[beatmap.Beatmap], bool] = None,
-    **kwargs,
+def download_local_mapset_t100_replays(
+        mapset_folder: str,
+        verbose: bool = False,
+        filter: None | Callable[[beatmap.Beatmap], bool] = None,
+        **kwargs,
 ) -> pd.DataFrame:
     mapset_folder_name = mapset_folder
     mapset_folder = f"{OSU_PATH}/Songs/{mapset_folder}"
@@ -185,7 +198,7 @@ def download_local_mapset_t50_replays(
         with open(map_path, "rb") as f:
             hash = hashlib.md5(f.read()).hexdigest()
 
-        downloaded_replays = download_t50_replays(
+        downloaded_replays = download_t100_replays(
             mp, cache_map_path=cache_map_path, map_md5=hash, verbose=verbose, **kwargs
         )
         if downloaded_replays is None:
@@ -206,29 +219,32 @@ def download_local_mapset_t50_replays(
 import tqdm
 
 
-# call download_local_mapset_t50_replays for all in the list
+# call download_local_mapset_t100_replays for all in the list
 def download_mapsets(
-    mapset_folders: list[str],
-    return_dataframe: bool = False,
-    verbose: bool = False,
-    **kwargs,
+        mapset_folders: list[str],
+        return_dataframe: bool = False,
+        verbose: bool = False,
+        **kwargs,
 ):
     dataframe = pd.DataFrame(columns=["replay", "beatmap"])
 
     pbar = tqdm.tqdm(
         mapset_folders, total=len(mapset_folders), desc="Downloading replays"
     )
+    gotten = 0
     for mapset_folder in pbar:
         # if the mapset folder doesn't start with a number, chances are it won't have useful metadata in the maps anyways
         pattern = r"^(\d+) "
         match = re.match(pattern, mapset_folder)
+        # skip way too old maps to have metadata
         if not match or int(match.group(1)) < 100000:
             verbose and print(f"Skipping folder {mapset_folder}")
             continue
-        pbar.set_description(f"Downloading replays from maps in {mapset_folder}")
-        df = download_local_mapset_t50_replays(mapset_folder, verbose=verbose, **kwargs)
+        pbar.set_description(f"Downloading replays from maps in {mapset_folder} (TOTAL: {gotten})")
+        df = download_local_mapset_t100_replays(mapset_folder, verbose=verbose, **kwargs)
         if df is not None:
             verbose and print(f"Got {len(df)} replays that meet the criteria.")
+            gotten += len(df)
             if return_dataframe:
                 dataframe = pd.concat([dataframe, df])
 
@@ -243,7 +259,7 @@ def get_all_mapset_folders_on_disk() -> list[str]:
 
 
 def get_user_replay(
-    score_id: int, map_md5: str, user_id: int, verbose: bool = False
+        score_id: int, map_md5: str, user_id: int, verbose: bool = False
 ) -> (replay.Replay, int):
     save_path = f".data/replays-{user_id}/{score_id}.osr"
     if os.path.exists(save_path):
@@ -293,373 +309,203 @@ def get_user_replay(
     return (rp, score_id)
 
 
-def download_user_best_scores(
-    user_id: int,
-    max: int = 10000,
-    only: Literal["FC", "S", "ALL"] = "S",
-    verbose: bool = False,
+def _download_user_scores_by_type(
+        user_id: int,
+        score_type: Literal["best", "recent", "firsts"],
+        max: int = 10000,
+        only: Literal["FC", "S", "ALL"] = "S",
+        verbose: bool = False,
 ) -> list[replay.Replay]:
     retry_times = 0
-    scores_url = (
-        f"https://osu.ppy.sh/api/v2/users/{user_id}/scores/best?mode=osu&limit={max}"
-    )
+    replays = []
 
-    if not os.path.exists(f".data/replays-{user_id}/"):
-        os.makedirs(f".data/replays-{user_id}/")
-
-    response = requests.get(scores_url)
-    if response.status_code // 100 != 2:
-        if response.status_code == 404:
-            return None
-        verbose and print(
-            f"osu responded with status code {response.status_code}, waiting a few secs"
+    for offset in range(int(math.ceil(max / 100.0))):
+        scores_url = (
+            f"https://osu.ppy.sh/users/{user_id}/scores/{score_type}?mode=osu&limit={max}&offset={offset * 100}"
         )
 
-        while retry_times < 5 and response.status_code // 100 != 2:
-            time.sleep(4 * (retry_times + 1))
-            response = requests.get(scores_url)
+        replays_path = f".data/replays-{user_id}/"
+        if not os.path.exists(replays_path):
+            os.makedirs(replays_path)
+
+        response = requests.get(scores_url)
+        if response.status_code // 100 != 2:
             if response.status_code == 404:
                 return None
-            if response.status_code // 100 == 2:
-                break
             verbose and print(
                 f"osu responded with status code {response.status_code}, waiting a few secs"
             )
-            retry_times += 1
 
-        if retry_times == 5:
-            print("Error: Retried 5 or so times without a 200 status code, stopping.")
-            return None
-
-    scores = json.loads(response.text)
-
-    # filter scores based on criteria
-    replay_ids = []
-    for score in scores:
-        rank = score["rank"]
-        if only == "S" and not rank.startswith("S"):
-            continue
-        elif only == "FC" and not score["is_perfect_combo"]:
-            continue
-
-        if score["has_replay"]:
-            replay_ids.append(
-                (
-                    score["id"],
-                    score["beatmap"]["checksum"],
-                    score["beatmap"]["beatmapset_id"],
-                    score["beatmap"]["id"],
+            while retry_times < 5 and response.status_code // 100 != 2:
+                time.sleep(4 * (retry_times + 1))
+                response = requests.get(scores_url)
+                if response.status_code == 404:
+                    return None
+                if response.status_code // 100 == 2:
+                    break
+                verbose and print(
+                    f"osu responded with status code {response.status_code}, waiting a few secs"
                 )
-            )
+                retry_times += 1
 
-    # download beatmapsets and replays
-    replays = []
-    score_metadata = {}  # Store beatmapset_id for each score_id
+            if retry_times == 5:
+                print("Error: Retried 5 or so times without a 200 status code, stopping.")
+                return None
 
-    for score_id, map_md5, beatmapset_id, beatmap_id in replay_ids:
-        score_metadata[score_id] = {
-            "beatmapset_id": beatmapset_id,
-            "beatmap_id": beatmap_id,
-        }
+        scores = json.loads(response.text)
 
-        # Download beatmapset (function handles caching automatically)
-        beatmapset_path = download_beatmapset(beatmapset_id, verbose=verbose)
-        if not beatmapset_path and verbose:
-            print(f"Failed to download beatmapset {beatmapset_id} for score {score_id}")
+        # filter scores based on criteria
+        replay_ids = []
+        for score in scores:
+            rank = score["rank"]
+            if only == "S" and not rank.startswith("S"):
+                continue
+            elif only == "FC" and not score["is_perfect_combo"]:
+                continue
 
-        # Download replay
-        replay_result = get_user_replay(score_id, map_md5, user_id, verbose)
-        if replay_result is not None:
-            replays.append(replay_result)
-
-    replays = [t for t in replays if t is not None]
-
-    if replays is None:
-        verbose and print(f"Failed to download replays for user {user_id}")
-        return None
-
-    for replay, id in replays:
-        meta_path = f".data/replays-{user_id}/{id}.meta"
-        if not os.path.exists(meta_path):
-            with open(meta_path, "w") as f:
-                metadata = score_metadata.get(id, {})
-                f.write(
-                    json.dumps(
-                        {
-                            "user_id": user_id,
-                            "score_type": "best",
-                            "beatmapset_id": metadata.get("beatmapset_id"),
-                            "beatmap_id": metadata.get("beatmap_id"),
-                        }
+            if score["has_replay"]:
+                replay_ids.append(
+                    (
+                        score["id"],
+                        score["beatmap"]["checksum"],
+                        score["beatmap"]["beatmapset_id"],
+                        score["beatmap"]["id"],
                     )
                 )
 
-    replays = [replay for (replay, id) in replays]
+        # download beatmapsets and replays
+        if len(replay_ids) == 0:
+            return replays
+
+        for score_id, map_md5, beatmapset_id, beatmap_id in tqdm.tqdm(replay_ids,
+                                                                      desc=f"Downloading replays in category {score_type}, offset {offset * 100}"):
+            # Download beatmapset (function handles caching automatically)
+            beatmapset_path = download_beatmapset(beatmapset_id, needs=beatmap_id, verbose=verbose)
+            if not beatmapset_path and verbose:
+                print(f"Failed to download beatmapset {beatmapset_id} for score {score_id}")
+
+            # Download replay
+            replay_result = get_user_replay(score_id, map_md5, user_id, verbose)
+            if replay_result is not None:
+                replays.append(replay_result)
+
+            (replay, id) = replay_result
+
+            # Find the specific map it was for (linear search oh well)
+            mapfile_path = find_diff(target_id=beatmap_id, mapset_path=beatmapset_path)
+
+            if mapfile_path is None:
+                print("Failed to get the specific map for replay..")
+                continue
+
+            meta_path = f"{replays_path}/{id}.meta"
+            if not os.path.exists(meta_path):
+                with open(meta_path, "w") as f:
+                    f.write(json.dumps({"map": mapfile_path}))
+
+            replays.append(replay)
+
+    replays = [t for t in replays if t is not None]
+
+    if len(replays) == 0:
+        verbose and print(f"Failed to download replays for user {user_id}")
+        return None
 
     return replays
+
+
+def download_user_best_scores(
+        user_id: int,
+        max: int = 10000,
+        only: Literal["FC", "S", "ALL"] = "S",
+        verbose: bool = False,
+) -> list[replay.Replay]:
+    return _download_user_scores_by_type(user_id, "best", max, only, verbose)
 
 
 def download_user_recent_scores(
-    user_id: int,
-    max: int = 10000,
-    only: Literal["FC", "S", "ALL"] = "S",
-    verbose: bool = False,
+        user_id: int,
+        max: int = 10000,
+        only: Literal["FC", "S", "ALL"] = "S",
+        verbose: bool = False,
 ) -> list[replay.Replay]:
-    retry_times = 0
-    scores_url = (
-        f"https://osu.ppy.sh/api/v2/users/{user_id}/scores/recent?mode=osu&limit={max}"
-    )
-
-    if not os.path.exists(f".data/replays-{user_id}/"):
-        os.makedirs(f".data/replays-{user_id}/")
-
-    response = requests.get(scores_url)
-    if response.status_code // 100 != 2:
-        if response.status_code == 404:
-            return None
-        verbose and print(
-            f"osu responded with status code {response.status_code}, waiting a few secs"
-        )
-
-        while retry_times < 5 and response.status_code // 100 != 2:
-            time.sleep(4 * (retry_times + 1))
-            response = requests.get(scores_url)
-            if response.status_code == 404:
-                return None
-            if response.status_code // 100 == 2:
-                break
-            verbose and print(
-                f"osu responded with status code {response.status_code}, waiting a few secs"
-            )
-            retry_times += 1
-
-        if retry_times == 5:
-            print("Error: Retried 5 or so times without a 200 status code, stopping.")
-            return None
-
-    scores = json.loads(response.text)
-
-    # filter scores based on criteria
-    replay_ids = []
-    for score in scores:
-        rank = score["rank"]
-        if only == "S" and not rank.startswith("S"):
-            continue
-        elif only == "FC" and not score["is_perfect_combo"]:
-            continue
-
-        if score["has_replay"]:
-            replay_ids.append(
-                (
-                    score["id"],
-                    score["beatmap"]["checksum"],
-                    score["beatmap"]["beatmapset_id"],
-                    score["beatmap"]["id"],
-                )
-            )
-
-    # download beatmapsets and replays
-    replays = []
-    score_metadata = {}  # Store beatmapset_id for each score_id
-
-    for score_id, map_md5, beatmapset_id, beatmap_id in replay_ids:
-        score_metadata[score_id] = {
-            "beatmapset_id": beatmapset_id,
-            "beatmap_id": beatmap_id,
-        }
-
-        # Download beatmapset (function handles caching automatically)
-        beatmapset_path = download_beatmapset(beatmapset_id, verbose=verbose)
-        if not beatmapset_path and verbose:
-            print(f"Failed to download beatmapset {beatmapset_id} for score {score_id}")
-
-        # Download replay
-        replay_result = get_user_replay(score_id, map_md5, user_id, verbose)
-        if replay_result is not None:
-            replays.append(replay_result)
-
-    replays = [t for t in replays if t is not None]
-
-    if replays is None:
-        verbose and print(f"Failed to download replays for user {user_id}")
-        return None
-
-    for replay, id in replays:
-        meta_path = f".data/replays-{user_id}/{id}.meta"
-        if not os.path.exists(meta_path):
-            with open(meta_path, "w") as f:
-                metadata = score_metadata.get(id, {})
-                f.write(
-                    json.dumps(
-                        {
-                            "user_id": user_id,
-                            "score_type": "recent",
-                            "beatmapset_id": metadata.get("beatmapset_id"),
-                            "beatmap_id": metadata.get("beatmap_id"),
-                        }
-                    )
-                )
-
-    replays = [replay for (replay, id) in replays]
-
-    return replays
+    return _download_user_scores_by_type(user_id, "recent", max, only, verbose)
 
 
 def download_user_first_scores(
-    user_id: int,
-    max: int = 10000,
-    only: Literal["FC", "S", "ALL"] = "S",
-    verbose: bool = False,
+        user_id: int,
+        max: int = 10000,
+        only: Literal["FC", "S", "ALL"] = "S",
+        verbose: bool = False,
 ) -> list[replay.Replay]:
-    retry_times = 0
-    scores_url = (
-        f"https://osu.ppy.sh/api/v2/users/{user_id}/scores/firsts?mode=osu&limit={max}"
-    )
+    return _download_user_scores_by_type(user_id, "firsts", max, only, verbose)
 
-    if not os.path.exists(f".data/replays-{user_id}/"):
-        os.makedirs(f".data/replays-{user_id}/")
 
-    response = requests.get(scores_url)
-    if response.status_code // 100 != 2:
-        if response.status_code == 404:
-            return None
-        verbose and print(
-            f"osu responded with status code {response.status_code}, waiting a few secs"
+def download_user_scores(
+        user_id: int,
+        score_type: Literal["best", "firsts", "recent", "ALL"],
+        max: int = 10000,
+        only: Literal["FC", "S", "ALL"] = "S",
+        verbose: bool = False,
+):
+    """Download user scores by type or all types"""
+    if score_type == "ALL":
+        results = {}
+
+        if verbose:
+            print(f"Downloading all scores for user {user_id}...")
+
+        if verbose:
+            print("  Downloading best scores...")
+        results["best"] = _download_user_scores_by_type(
+            user_id, "best", max=max, only=only, verbose=verbose
         )
 
-        while retry_times < 5 and response.status_code // 100 != 2:
-            time.sleep(4 * (retry_times + 1))
-            response = requests.get(scores_url)
-            if response.status_code == 404:
-                return None
-            if response.status_code // 100 == 2:
-                break
-            verbose and print(
-                f"osu responded with status code {response.status_code}, waiting a few secs"
-            )
-            retry_times += 1
-
-        if retry_times == 5:
-            print("Error: Retried 5 or so times without a 200 status code, stopping.")
-            return None
-
-    scores = json.loads(response.text)
-
-    # filter scores based on criteria
-    replay_ids = []
-    for score in scores:
-        rank = score["rank"]
-        if only == "S" and not rank.startswith("S"):
-            continue
-        elif only == "FC" and not score["is_perfect_combo"]:
-            continue
-
-        if score["has_replay"]:
-            replay_ids.append(
-                (
-                    score["id"],
-                    score["beatmap"]["checksum"],
-                    score["beatmap"]["beatmapset_id"],
-                    score["beatmap"]["id"],
-                )
-            )
-
-    # download beatmapsets and replays
-    replays = []
-    score_metadata = {}  # Store beatmapset_id for each score_id
-
-    for score_id, map_md5, beatmapset_id, beatmap_id in replay_ids:
-        score_metadata[score_id] = {
-            "beatmapset_id": beatmapset_id,
-            "beatmap_id": beatmap_id,
-        }
-
-        # Download beatmapset (function handles caching automatically)
-        beatmapset_path = download_beatmapset(beatmapset_id, verbose=verbose)
-        if not beatmapset_path and verbose:
-            print(f"Failed to download beatmapset {beatmapset_id} for score {score_id}")
-
-        # Download replay
-        replay_result = get_user_replay(score_id, map_md5, user_id, verbose)
-        if replay_result is not None:
-            replays.append(replay_result)
-
-    replays = [t for t in replays if t is not None]
-
-    if replays is None:
-        verbose and print(f"Failed to download replays for user {user_id}")
-        return None
-
-    for replay, id in replays:
-        meta_path = f".data/replays-{user_id}/{id}.meta"
-        if not os.path.exists(meta_path):
-            with open(meta_path, "w") as f:
-                metadata = score_metadata.get(id, {})
-                f.write(
-                    json.dumps(
-                        {
-                            "user_id": user_id,
-                            "score_type": "firsts",
-                            "beatmapset_id": metadata.get("beatmapset_id"),
-                            "beatmap_id": metadata.get("beatmap_id"),
-                        }
-                    )
-                )
-
-    replays = [replay for (replay, id) in replays]
-
-    return replays
-
-
-def download_all_user_scores(
-    user_id: int,
-    max: int = 10000,
-    only: Literal["FC", "S", "ALL"] = "S",
-    verbose: bool = False,
-) -> dict:
-    """Download all user scores (best, recent, firsts) with the same parameters"""
-    results = {}
-
-    if verbose:
-        print(f"Downloading all scores for user {user_id}...")
-
-    if verbose:
-        print("  Downloading best scores...")
-    results["best"] = download_user_best_scores(
-        user_id, max=max, only=only, verbose=verbose
-    )
-
-    if verbose:
-        print("  Downloading recent scores...")
-    results["recent"] = download_user_recent_scores(
-        user_id, max=max, only=only, verbose=verbose
-    )
-
-    if verbose:
-        print("  Downloading first scores...")
-    results["firsts"] = download_user_first_scores(
-        user_id, max=max, only=only, verbose=verbose
-    )
-
-    if verbose:
-        total_replays = sum(
-            len(replays) if replays else 0 for replays in results.values()
+        if verbose:
+            print("  Downloading recent scores...")
+        results["recent"] = _download_user_scores_by_type(
+            user_id, "recent", max=max, only=only, verbose=verbose
         )
-        print(f"Total downloaded: {total_replays} replays")
 
-    return results
+        if verbose:
+            print("  Downloading first scores...")
+        results["firsts"] = _download_user_scores_by_type(
+            user_id, "firsts", max=max, only=only, verbose=verbose
+        )
+
+        if verbose:
+            total_replays = sum(
+                len(replays) if replays else 0 for replays in results.values()
+            )
+            print(f"Total downloaded: {total_replays} replays")
+
+        return results
+    else:
+        return _download_user_scores_by_type(user_id, score_type, max, only, verbose)
 
 
-def download_beatmapset(beatmapset_id: int, verbose: bool = False) -> str:
-    """Download and extract beatmapset from osu! API
+def find_diff(target_id: str, mapset_path: str) -> str | None:
+    target_id = str(target_id)
+    mapfiles = [path for path in os.listdir(mapset_path) if path.endswith('.osu')]
 
-    Args:
-        beatmapset_id: The beatmapset ID to download
-        verbose: Whether to print progress messages
+    mapfile_path = None
+    for mapfile in mapfiles:
+        mappath = f'{mapset_path}/{mapfile}'
+        bm = beatmap.load(mappath)
+        id = str(bm.beatmap_id()).strip()
+        if target_id.strip() == id:
+            mapfile_path = mappath
+            break
 
-    Returns:
-        Path to extracted beatmapset directory, or None if failed
-    """
+    return mapfile_path
+
+
+def download_beatmapset(
+        beatmapset_id: int,
+        needs: int,
+        # the mirror (beatconnect) rate limits less afaik, but WAY slower
+        use_mirror: bool = True,
+        verbose: bool = False) -> str:
     songs_cache_path = ".data/songs"
     if not os.path.exists(songs_cache_path):
         os.makedirs(songs_cache_path, exist_ok=True)
@@ -670,48 +516,47 @@ def download_beatmapset(beatmapset_id: int, verbose: bool = False) -> str:
     ]
     if existing_dirs:
         beatmapset_path = os.path.join(songs_cache_path, existing_dirs[0])
-        if verbose:
-            print(
-                f"Beatmapset {beatmapset_id} already exists in cache: {existing_dirs[0]}"
-            )
-        return beatmapset_path
+        mapfile = find_diff(target_id=str(needs), mapset_path=beatmapset_path)
+        if mapfile:
+            return beatmapset_path
+        else:
+            print("found map folder but no corresponding diff: redownloading..")
 
-    url = f"https://osu.ppy.sh/beatmapsets/{beatmapset_id}/download"
     retry_times = 0
-    headers = {
-        "Host": "osu.ppy.sh",
-        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:141.0) Gecko/20100101 Firefox/141.0",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
-        "Accept-Encoding": "gzip, deflate, br, zstd",
-        "Referer": f"https://osu.ppy.sh/beatmapsets/{beatmapset_id}",
-        "Connection": "keep-alive",
-        "Cookie": f"osu_session={osu_session}",
-        "Upgrade-Insecure-Requests": "1",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "same-origin",
-        "Sec-Fetch-User": "?1",
-        "Cache-Control": "no-cache",
-        "Pragma": "no-cache",
-    }
+
+    if use_mirror:
+        url = f"https://beatconnect.io/b/{beatmapset_id}/"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:141.0) Gecko/20100101 Firefox/141.0",
+        }
+    else:
+        url = f"https://osu.ppy.sh/beatmapsets/{beatmapset_id}/download"
+        headers = {
+            "Host": "osu.ppy.sh",
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:141.0) Gecko/20100101 Firefox/141.0",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+            "Accept-Encoding": "gzip, deflate, br, zstd",
+            "Referer": f"https://osu.ppy.sh/beatmapsets/{beatmapset_id}",
+            "Connection": "keep-alive",
+            "Cookie": f"osu_session={osu_session}",
+            "Upgrade-Insecure-Requests": "1",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-User": "?1",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+        }
+
 
     if verbose:
         print(f"Downloading beatmapset {beatmapset_id}...")
-        print(f"Request URL: {url}")
-        print(
-            f"Session cookie: {osu_session[:50]}..."
-            if osu_session
-            else "No session cookie found!"
-        )
 
     response = requests.get(url, headers=headers, allow_redirects=True)
 
     if verbose:
-        print(f"Response status: {response.status_code}")
-        if response.history:
-            print(f"Redirected from: {[r.url for r in response.history]}")
-        print(f"Final URL: {response.url}")
+        print(f"Downloading from: {response.url}")
 
     if response.status_code // 100 != 2:
         if response.status_code == 404:
@@ -722,15 +567,6 @@ def download_beatmapset(beatmapset_id: int, verbose: bool = False) -> str:
             print(
                 f"Authentication failed (401) for beatmapset {beatmapset_id}. Check your osu_session cookie."
             )
-            if verbose:
-                print(
-                    "Current session cookie:",
-                    osu_session[:50] + "..." if osu_session else "None",
-                )
-                print(
-                    "Expected format from .har file:",
-                    "eyJpdiI6IlpKZFVuZ244RXVPRzBTV3p6Q000ckE9PSIsInZhbHVlIjoi...",
-                )
             return None
 
         verbose and print(
@@ -749,6 +585,10 @@ def download_beatmapset(beatmapset_id: int, verbose: bool = False) -> str:
                     f"Authentication failed (401) for beatmapset {beatmapset_id}. Check your osu_session cookie."
                 )
                 return None
+            elif response.status_code == 429:
+                print("Rate limit reached... trying again in 10 minutes")
+                time.sleep(600)
+                print("Trying again now... :/")
             if response.status_code // 100 == 2:
                 break
             verbose and print(
@@ -760,62 +600,38 @@ def download_beatmapset(beatmapset_id: int, verbose: bool = False) -> str:
             print(
                 f"Error: Retried 5 times without success for beatmapset {beatmapset_id}, stopping. check osu session."
             )
+            print(response.content[:2000])
             return None
 
     # Save zip file temporarily
-    temp_zip_path = os.path.join(songs_cache_path, f"{beatmapset_id}_temp.zip")
+    temp_zip_path = os.path.join(songs_cache_path, f"TEMP_{beatmapset_id}.zip")
+
+    # get map name
+    mapname = str(beatmapset_id)
+    content_disposition = response.headers.get('Content-Disposition')
+    if content_disposition:
+        filename_match = re.findall(r'filename="?([^"]+)"?', content_disposition)
+        if filename_match:
+            mapname = filename_match[0]
+        else:
+            # Handle cases where filename might not be quoted or present
+            mapname = None
+
+    mapname = mapname.strip(".osz")
+
     try:
         with open(temp_zip_path, "wb") as f:
             f.write(response.content)
 
-        # Extract zip file
+        # Extract the map
         with zipfile.ZipFile(temp_zip_path, "r") as zip_ref:
-            # Get the first directory name from the zip to determine the beatmapset folder name
-            zip_contents = zip_ref.namelist()
-            if not zip_contents:
-                if verbose:
-                    print(f"Empty zip file for beatmapset {beatmapset_id}")
-                return None
-
-            # Extract all contents
-            zip_ref.extractall(songs_cache_path)
-
-            # Find the extracted directory (it should start with the beatmapset_id)
-            extracted_dirs = [
-                d
-                for d in os.listdir(songs_cache_path)
-                if os.path.isdir(os.path.join(songs_cache_path, d))
-                and d.startswith(str(beatmapset_id))
-            ]
-
-            if not extracted_dirs:
-                # If no directory starts with beatmapset_id, look for the main directory in zip
-                main_dir = (
-                    zip_contents[0].split("/")[0]
-                    if "/" in zip_contents[0]
-                    else zip_contents[0]
-                )
-                if os.path.isdir(os.path.join(songs_cache_path, main_dir)):
-                    # Rename to include beatmapset_id
-                    old_path = os.path.join(songs_cache_path, main_dir)
-                    new_path = os.path.join(
-                        songs_cache_path, f"{beatmapset_id} {main_dir}"
-                    )
-                    os.rename(old_path, new_path)
-                    beatmapset_path = new_path
-                else:
-                    if verbose:
-                        print(
-                            f"Could not find extracted directory for beatmapset {beatmapset_id}"
-                        )
-                    return None
-            else:
-                beatmapset_path = os.path.join(songs_cache_path, extracted_dirs[0])
+            mapset_path = f"{songs_cache_path}/{mapname}"
+            zip_ref.extractall(mapset_path)
 
         if verbose:
             print(f"Successfully downloaded and extracted beatmapset {beatmapset_id}")
 
-        return beatmapset_path
+        return mapset_path
 
     except Exception as e:
         if verbose:

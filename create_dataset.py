@@ -4,8 +4,8 @@ import numpy as np
 import osu.dataset as dataset
 
 REPLAY_LIMIT = 7500
-
-obj_dataset = dataset.replay_mapping_from_cache(REPLAY_LIMIT)
+mrekk_id = 7562902
+obj_dataset = dataset.user_replay_mapping_from_cache(user_id=mrekk_id, limit=REPLAY_LIMIT)
 
 print(len(obj_dataset))
 

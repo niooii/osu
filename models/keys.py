@@ -1,64 +1,83 @@
-import os
-import datetime
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import numpy as np
-import matplotlib.pyplot as plt
 import tqdm
-from sklearn.model_selection import train_test_split
-from torch.utils.data import DataLoader, TensorDataset
 
 import osu.dataset as dataset
 from .model import KeyModel
+from .base import OsuModel
 
 
-class OsuKeyModel:
+class OsuKeyModel(OsuModel):
     def __init__(self, batch_size=64, device=None, noise_std=0.0):
-        self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.batch_size = batch_size
-        self.input_size = len(dataset.INPUT_FEATURES)
+        # Store KeyModel-specific parameters before calling super().__init__
         self.noise_std = noise_std
-
-        self.key_model = KeyModel(self.input_size, noise_std)
-        self.key_model.to(self.device)
         
-        if hasattr(torch, 'compile'):
-            self.key_model = torch.compile(self.key_model)
-
+        # Call parent constructor which will call our abstract methods
+        super().__init__(batch_size=batch_size, device=device, noise_std=noise_std)
+    
+    def _initialize_models(self, **kwargs):
+        """Initialize key prediction model."""
+        self.key_model = KeyModel(self.input_size, self.noise_std)
+    
+    def _initialize_optimizers(self):
+        """Initialize key model optimizer."""
         self.key_optimizer = optim.AdamW(self.key_model.parameters(), lr=0.01, weight_decay=0.001)
         self.key_criterion = nn.BCEWithLogitsLoss()
+    
+    def _extract_target_data(self, output_data):
+        """Extract key data (k1, k2) from output data for key training."""
+        return output_data[:, :, 2:]  # Take last 2 features (k1, k2)
+    
+    def _get_target_data_name(self):
+        """Return description of target data type."""
+        return "keys only"
 
-        # Training history
-        self.train_losses = []
-        self.test_losses = []
+    def _train_epoch(self, epoch, total_epochs, **kwargs):
+        """Train KeyModel for one epoch with training and validation phases."""
+        # Training phase
+        self.key_model.train()
+        epoch_train_loss = 0
 
-        # Data loaders (will be set by load_data)
-        self.train_loader = None
-        self.test_loader = None
+        for batch_x, batch_y in tqdm.tqdm(self.train_loader, desc=f'Epoch {epoch + 1}/{total_epochs} (Keys)'):
+            batch_x = batch_x.to(self.device)
+            batch_y = batch_y.to(self.device)
 
-        print(f"Key Model initialized on {self.device} (noise_std={noise_std})")
-        key_params = sum(p.numel() for p in self.key_model.parameters() if p.requires_grad)
-        print(f"Key model parameters: {key_params}")
+            # Process keys to normalize dominant key
+            self._process_keys(batch_y)
 
-    def load_data(self, input_data, output_data, test_size=0.2):
-        """Load data - splits output_data internally to use only key data (k1, k2)"""
-        # Extract only key data (k1, k2) from output_data
-        key_data = output_data[:, :, 2:]  # Take last 2 features (k1, k2)
-        
-        # Train/test split
-        x_train, x_test, y_train, y_test = train_test_split(
-            input_data, key_data, test_size=test_size, random_state=42
-        )
+            # Train key model
+            self.key_optimizer.zero_grad()
+            keys = self.key_model(batch_x)
+            keys_loss = self.key_criterion(keys, batch_y)
+            keys_loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.key_model.parameters(), max_norm=1.0)
+            self.key_optimizer.step()
 
-        # Create DataLoaders
-        train_dataset = TensorDataset(torch.FloatTensor(x_train), torch.FloatTensor(y_train))
-        test_dataset = TensorDataset(torch.FloatTensor(x_test), torch.FloatTensor(y_test))
+            epoch_train_loss += keys_loss.item()
 
-        self.train_loader = DataLoader(train_dataset, batch_size=self.batch_size, shuffle=True)
-        self.test_loader = DataLoader(test_dataset, batch_size=self.batch_size, shuffle=False)
+        # Validation phase
+        self.key_model.eval()
+        epoch_test_loss = 0
+        with torch.no_grad():
+            for batch_x, batch_y in self.test_loader:
+                batch_x = batch_x.to(self.device)
+                batch_y = batch_y.to(self.device)
 
-        print(f"Data loaded: {len(train_dataset)} training samples, {len(test_dataset)} test samples (keys only)")
+                self._process_keys(batch_y)
+
+                keys = self.key_model(batch_x)
+                keys_loss = self.key_criterion(keys, batch_y)
+                epoch_test_loss += keys_loss.item()
+
+        # Calculate average losses
+        avg_train_loss = epoch_train_loss / len(self.train_loader)
+        avg_test_loss = epoch_test_loss / len(self.test_loader)
+
+        return {
+            'train_loss': avg_train_loss,
+            'test_loss': avg_test_loss
+        }
 
     def _process_keys(self, keys_tensor: torch.FloatTensor):
         """Process keys to normalize dominant key to first position"""
@@ -76,97 +95,19 @@ class OsuKeyModel:
 
         keys_tensor[swap_mask] = torch.flip(keys_tensor[swap_mask], dims=[2])
 
-    def train(self, epochs: int):
-        if self.train_loader is None or self.test_loader is None:
-            raise ValueError("No data loaded. Call load_data() first.")
-
-        for epoch in range(epochs):
-            # Training phase
-            self.key_model.train()
-            epoch_train_loss = 0
-
-            for batch_x, batch_y in tqdm.tqdm(self.train_loader, desc=f'Epoch {epoch + 1}/{epochs} (Keys)'):
-                batch_x = batch_x.to(self.device)
-                batch_y = batch_y.to(self.device)
-
-                # Process keys to normalize dominant key
-                self._process_keys(batch_y)
-
-                # Train key model
-                self.key_optimizer.zero_grad()
-                keys = self.key_model(batch_x)
-                keys_loss = self.key_criterion(keys, batch_y)
-                keys_loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.key_model.parameters(), max_norm=1.0)
-                self.key_optimizer.step()
-
-                epoch_train_loss += keys_loss.item()
-
-            # Validation phase
-            self.key_model.eval()
-            epoch_test_loss = 0
-            with torch.no_grad():
-                for batch_x, batch_y in self.test_loader:
-                    batch_x = batch_x.to(self.device)
-                    batch_y = batch_y.to(self.device)
-
-                    self._process_keys(batch_y)
-
-                    keys = self.key_model(batch_x)
-                    keys_loss = self.key_criterion(keys, batch_y)
-                    epoch_test_loss += keys_loss.item()
-
-            # Calculate average losses
-            avg_train_loss = epoch_train_loss / len(self.train_loader)
-            avg_test_loss = epoch_test_loss / len(self.test_loader)
-
-            self.train_losses.append(avg_train_loss)
-            self.test_losses.append(avg_test_loss)
-
-            print(f'Epoch {epoch + 1}/{epochs}, Train: {avg_train_loss:.4f}, Test: {avg_test_loss:.4f}')
-
-    def plot_losses(self):
-        plt.figure(figsize=(10, 6))
-        plt.plot(self.train_losses, label='Train Keys')
-        plt.plot(self.test_losses, label='Test Keys')
-        plt.xlabel('Epoch')
-        plt.ylabel('Loss')
-        plt.title('Key Model Training Loss')
-        plt.legend()
-        plt.tight_layout()
-        plt.show()
-
-    def save(self, path=None):
-        if path is None:
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            path = f'.trained/keys_{timestamp}.pt'
-
-        if not os.path.exists('.trained'):
-            os.makedirs('.trained')
-
-        torch.save({
+    def _get_state_dict(self):
+        """Get state dictionary for saving KeyModel."""
+        return {
             'key_model': self.key_model.state_dict()
-        }, path)
-        torch.save({
-            'key_model': self.key_model.state_dict()
-        }, '.trained/keys_most_recent.pt')
-        print(f"Key model saved to {path}")
-
-    @staticmethod
-    def load(path, noise_std=0.0, device=None):
-        device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-        key_model = OsuKeyModel(device=device, noise_std=noise_std)
-        
-        checkpoint = torch.load(path, map_location=device)
-        key_model.key_model.load_state_dict(checkpoint['key_model'])
-        key_model.key_model.eval()
-        print(f"Key model loaded from {path}")
-        return key_model
+        }
+    
+    def _load_state_dict(self, checkpoint):
+        """Load state dictionary for KeyModel."""
+        self.key_model.load_state_dict(checkpoint['key_model'])
 
     def generate(self, beatmap_data):
         """Generate key predictions - returns boolean array"""
-        self.key_model.eval()
+        self._set_eval_mode()
         with torch.no_grad():
             beatmap_tensor = torch.FloatTensor(beatmap_data).to(self.device)
             
@@ -177,4 +118,5 @@ class OsuKeyModel:
             key_probs = torch.sigmoid(keys)
             keys_bool = (key_probs > 0.5).float()
 
-            return keys_bool.cpu().numpy()
+        self._set_train_mode()
+        return keys_bool.cpu().numpy()
