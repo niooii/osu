@@ -364,14 +364,13 @@ class Slider(HitCircle):
 		"""Get the complete curve points for the slider including repeats"""
 		base_curve = self._get_base_curve_points()
 		
-		# Handle repeats and reversals
 		complete_curve = []
 		for i in range(1, self.repeat + 1):
 			if i % 2 == 1:
-				# Forward direction
+				# Forward
 				complete_curve.extend(base_curve)
 			else:
-				# Reverse direction
+				# Reverse
 				complete_curve.extend(list(reversed(base_curve)))
 		
 		return complete_curve

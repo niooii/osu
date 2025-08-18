@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import time
+import polars as pl
 import zipfile
 from typing import Callable, Literal
 
@@ -53,6 +54,10 @@ def get_replay(
             response = requests.get(url, headers=headers)
             if response.status_code == 404:
                 return None
+            elif response.status_code == 429:
+                print("Rate limit reached... trying again in 5 minutes")
+                time.sleep(300)
+                print("Trying again now... :/")
             if response.status_code // 100 == 2:
                 break
             verbose and print(
@@ -67,7 +72,7 @@ def get_replay(
 
     rp = replay.Replay(io.BytesIO(response.content))
     if rp.map_md5 != map_md5:
-        verbose and print(f"replay {score_id}: mismatching hash.")
+        print(f"replay {score_id}: mismatching hash.")
         return None
 
     # save to disk cache
@@ -107,8 +112,8 @@ def download_t100_replays(
             if response.status_code == 404:
                 return None
             elif response.status_code == 429:
-                print("Rate limit reached... trying again in 10 minutes")
-                time.sleep(600)
+                print("Rate limit reached... trying again in 5 minutes")
+                time.sleep(300)
                 print("Trying again now... :/")
             if response.status_code // 100 == 2:
                 break
@@ -265,6 +270,8 @@ def get_user_replay(
     if os.path.exists(save_path):
         return (replay.load(save_path), score_id)
 
+    # dodge rate limit
+    time.sleep(1.5)
     url = f"https://osu.ppy.sh/scores/{score_id}/download"
     retry_times = 0
     headers = {
@@ -341,6 +348,10 @@ def _download_user_scores_by_type(
                 response = requests.get(scores_url)
                 if response.status_code == 404:
                     return None
+                elif response.status_code == 429:
+                    print("Rate limit reached... trying again in 5 minutes")
+                    time.sleep(300)
+                    print("Trying again now... :/")
                 if response.status_code // 100 == 2:
                     break
                 verbose and print(
@@ -380,14 +391,22 @@ def _download_user_scores_by_type(
         for score_id, map_md5, beatmapset_id, beatmap_id in tqdm.tqdm(replay_ids,
                                                                       desc=f"Downloading replays in category {score_type}, offset {offset * 100}"):
             # Download beatmapset (function handles caching automatically)
-            beatmapset_path = download_beatmapset(beatmapset_id, needs=beatmap_id, verbose=verbose)
-            if not beatmapset_path and verbose:
-                print(f"Failed to download beatmapset {beatmapset_id} for score {score_id}")
+            beatmapset_path = download_beatmapset(
+                beatmapset_id,
+                needs=beatmap_id,
+                use_mirror=False,
+                verbose=verbose
+            )
+            if not beatmapset_path:
+                verbose and print(f"Failed to download beatmapset {beatmapset_id} for score {score_id}")
+                continue
 
             # Download replay
             replay_result = get_user_replay(score_id, map_md5, user_id, verbose)
-            if replay_result is not None:
-                replays.append(replay_result)
+            if replay_result is None:
+                continue
+
+            replays.append(replay_result)
 
             (replay, id) = replay_result
 
@@ -395,7 +414,7 @@ def _download_user_scores_by_type(
             mapfile_path = find_diff(target_id=beatmap_id, mapset_path=beatmapset_path)
 
             if mapfile_path is None:
-                print("Failed to get the specific map for replay..")
+                verbose and print("Failed to get the specific map for replay..")
                 continue
 
             meta_path = f"{replays_path}/{id}.meta"
@@ -413,6 +432,59 @@ def _download_user_scores_by_type(
 
     return replays
 
+# requires a polar dataframe with at least two columns:
+# id: int, beatmapset_id: int
+def download_from_df(df: pl.DataFrame, user_id: int, verbose: bool = False):
+    replays = []
+
+    replays_path = f".data/replays-{user_id}/"
+    if not os.path.exists(replays_path):
+        os.makedirs(replays_path)
+
+    prog = tqdm.tqdm(df.select(['id', 'beatmapset_id', 'beatmap_id']).iter_rows(),
+                                                                 desc=f"Downloading replays in dataframe..", total=len(df))
+    for score_id, beatmapset_id, beatmap_id in prog:
+        beatmapset_path = download_beatmapset(beatmapset_id, needs=beatmap_id, verbose=verbose)
+        if not beatmapset_path:
+            verbose and print(f"Failed to download beatmapset {beatmapset_id} for score {score_id}")
+            continue
+
+        # Find the specific map it was for (linear search oh well)
+        mapfile_path = find_diff(target_id=beatmap_id, mapset_path=beatmapset_path)
+
+        if mapfile_path is None:
+            verbose and print("Failed to get the specific map for replay..")
+            continue
+
+        map_md5 = hashlib.md5(open(mapfile_path, "rb").read()).hexdigest()
+
+        # Download replay
+        replay_result = get_user_replay(score_id, map_md5, user_id, verbose)
+        if replay_result is None:
+            verbose and print('Failed to get user replay, skipping')
+            continue
+
+        (replay, id) = replay_result
+
+        try:
+            meta_path = f"{replays_path}/{id}.meta"
+            if not os.path.exists(meta_path):
+                with open(meta_path, "w") as f:
+                    f.write(json.dumps({"map": mapfile_path}))
+        except:
+            print("Something went wrong writing meta file, skipping")
+            continue
+
+        replays.append(replay)
+        prog.set_description(f"Downloading replays in dataframe ({len(replays)} downloaded)..")
+
+    replays = [t for t in replays if t is not None]
+
+    if len(replays) == 0:
+        verbose and print(f"Failed to download replays for user {user_id}")
+        return None
+
+    return replays
 
 def download_user_best_scores(
         user_id: int,
@@ -491,7 +563,11 @@ def find_diff(target_id: str, mapset_path: str) -> str | None:
     mapfile_path = None
     for mapfile in mapfiles:
         mappath = f'{mapset_path}/{mapfile}'
-        bm = beatmap.load(mappath)
+        try:
+            bm = beatmap.load(mappath)
+        except RuntimeError as e:
+            print(f'Error loading beatmap: {e}. Skipping')
+            return None
         id = str(bm.beatmap_id()).strip()
         if target_id.strip() == id:
             mapfile_path = mappath
@@ -520,7 +596,7 @@ def download_beatmapset(
         if mapfile:
             return beatmapset_path
         else:
-            print("found map folder but no corresponding diff: redownloading..")
+            verbose and print("found map folder but no corresponding diff: redownloading..")
 
     retry_times = 0
 
@@ -586,8 +662,8 @@ def download_beatmapset(
                 )
                 return None
             elif response.status_code == 429:
-                print("Rate limit reached... trying again in 10 minutes")
-                time.sleep(600)
+                print("Rate limit reached... trying again in 5 minutes")
+                time.sleep(300)
                 print("Trying again now... :/")
             if response.status_code // 100 == 2:
                 break
@@ -634,8 +710,7 @@ def download_beatmapset(
         return mapset_path
 
     except Exception as e:
-        if verbose:
-            print(f"Error extracting beatmapset {beatmapset_id}: {e}")
+        verbose and print(f"Error extracting beatmapset {beatmapset_id}: {e}")
         return None
 
     finally:

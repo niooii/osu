@@ -29,10 +29,6 @@ class OsuKeyModel(OsuModel):
         """Extract key data (k1, k2) from output data for key training."""
         return output_data[:, :, 2:]  # Take last 2 features (k1, k2)
     
-    def _get_target_data_name(self):
-        """Return description of target data type."""
-        return "keys only"
-
     def _train_epoch(self, epoch, total_epochs, **kwargs):
         """Train KeyModel for one epoch with training and validation phases."""
         # Training phase

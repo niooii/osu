@@ -15,7 +15,7 @@ import osu.dataset as dataset
 import osu.rulesets.beatmap as bm
 from osu.rulesets.mods import Mods
 import osu.client.controller as controller
-from models.vae import OsuReplayVAE
+from models.vae.vae import OsuReplayVAE
 from models.rnn import OsuReplayRNN
 from models.keys import OsuKeyModel
 from osu.rulesets.core import OSU_PATH
@@ -330,7 +330,6 @@ class OsuAIGUI:
             dpg.set_value("debug_log", '\n'.join(lines[-10:]))
 
     def refresh_beatmap(self):
-        """Refresh current beatmap info from osu! memory"""
         try:
             osu = self.osu
             status = osu.game.status()

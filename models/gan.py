@@ -70,7 +70,7 @@ class OsuReplayGAN(OsuModel):
         """Initialize GAN generator and discriminator models."""
         self.generator = Generator(self.input_size)
         self.discriminator = Discriminator(self.input_size)
-        
+
         # Initialize loss functions
         self.adversarial_loss = nn.BCEWithLogitsLoss()
         self.pos_criterion = nn.SmoothL1Loss()
@@ -84,9 +84,6 @@ class OsuReplayGAN(OsuModel):
         """Extract position data (x, y) from output data for GAN training."""
         return output_data[:, :, :2]  # Take first 2 features (x, y)
     
-    def _get_target_data_name(self):
-        """Return description of target data type."""
-        return "position data"
 
     def _train_epoch(self, epoch, total_epochs, lambda_pos=0.01, **kwargs):
         """Train GAN for one epoch with alternating generator and discriminator training."""

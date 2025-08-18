@@ -29,11 +29,6 @@ class OsuReplayRNN(OsuModel):
     def _extract_target_data(self, output_data):
         """Extract position data (x, y) from output data for RNN training."""
         return output_data[:, :, :2]  # Take first 2 features (x, y)
-    
-    def _get_target_data_name(self):
-        """Return description of target data type."""
-        return "position only"
-
 
     def _train_epoch(self, epoch, total_epochs, **kwargs):
         """Train RNN for one epoch with training and validation phases."""

@@ -4,30 +4,30 @@ def compute(vertices, numPoints=None):
     """Compute Bézier curve points from control points"""
     if numPoints is None:
         numPoints = 50
-    
+
     if len(vertices) < 2:
         return vertices
-    
+
     # For Bézier curves with arbitrary number of points, we need to handle them differently
     # osu! uses a special format where multiple Bézier curves can be joined
     curve_points = []
-    
+
     # Find segments (osu! Bézier curves are separated by repeated points)
     segments = []
     current_segment = [vertices[0]]
-    
+
     for i in range(1, len(vertices)):
-        if vertices[i] == vertices[i-1] and len(current_segment) > 1:
+        if vertices[i] == vertices[i - 1] and len(current_segment) > 1:
             # End of segment, start new one
             segments.append(current_segment)
             current_segment = [vertices[i]]
         else:
             current_segment.append(vertices[i])
-    
+
     # Add the last segment
     if current_segment:
         segments.append(current_segment)
-    
+
     # Process each segment
     for segment in segments:
         if len(segment) == 1:
@@ -45,8 +45,10 @@ def compute(vertices, numPoints=None):
                 t_val = t / (numPoints - 1)
                 # Quadratic Bézier formula: B(t) = (1-t)²P₀ + 2(1-t)tP₁ + t²P₂
                 one_minus_t = 1 - t_val
-                x = one_minus_t**2 * segment[0][0] + 2 * one_minus_t * t_val * segment[1][0] + t_val**2 * segment[2][0]
-                y = one_minus_t**2 * segment[0][1] + 2 * one_minus_t * t_val * segment[1][1] + t_val**2 * segment[2][1]
+                x = one_minus_t ** 2 * segment[0][0] + 2 * one_minus_t * t_val * segment[1][0] + t_val ** 2 * \
+                    segment[2][0]
+                y = one_minus_t ** 2 * segment[0][1] + 2 * one_minus_t * t_val * segment[1][1] + t_val ** 2 * \
+                    segment[2][1]
                 curve_points.append((int(x), int(y)))
         elif len(segment) == 4:
             # Cubic Bézier curve - use the original algorithm
@@ -66,7 +68,7 @@ def compute(vertices, numPoints=None):
                 t_val = t / (numPoints - 1)
                 point = _de_casteljau(segment, t_val)
                 curve_points.append((int(point[0]), int(point[1])))
-    
+
     return curve_points
 
 
@@ -100,8 +102,8 @@ def _compute_cubic_bezier(vertices, numPoints=30):
     dy = b0y
 
     # Set up the number of steps and step size
-    numSteps = numPoints - 1 # arbitrary choice
-    h = 1.0 / numSteps # compute our step size
+    numSteps = numPoints - 1  # arbitrary choice
+    h = 1.0 / numSteps  # compute our step size
 
     # Compute forward differences from Bezier points and "h"
     pointX = dx
@@ -134,15 +136,14 @@ def _compute_cubic_bezier(vertices, numPoints=30):
     return result
 
 
+import numpy as np
+
+
 def _de_casteljau(points, t):
-    """De Casteljau's algorithm for computing Bézier curves of arbitrary degree"""
-    if len(points) == 1:
-        return points[0]
-    
-    new_points = []
-    for i in range(len(points) - 1):
-        x = (1 - t) * points[i][0] + t * points[i + 1][0]
-        y = (1 - t) * points[i][1] + t * points[i + 1][1]
-        new_points.append((x, y))
-    
-    return _de_casteljau(new_points, t)
+    """NumPy vectorized version"""
+    pts = np.array(points, dtype=np.float64)
+
+    while len(pts) > 1:
+        pts = (1 - t) * pts[:-1] + t * pts[1:]
+
+    return tuple(pts[0])

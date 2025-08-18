@@ -32,7 +32,7 @@ def filter_beatmap(beatmap: bm.Beatmap) -> bool:
     return True
 
 
-downloader.download_mapsets(mapsets, filter=filter_beatmap, max=100, only="ALL", verbose=False, by_user_id=user_id)
+# downloader.download_mapsets(mapsets, filter=filter_beatmap, max=100, only="ALL", verbose=False, by_user_id=user_id)
 
 replays = downloader.download_user_scores(
     user_id=user_id, score_type="ALL", only="ALL", max=1000

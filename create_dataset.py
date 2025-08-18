@@ -3,7 +3,7 @@ import datetime
 import numpy as np
 import osu.dataset as dataset
 
-REPLAY_LIMIT = 7500
+REPLAY_LIMIT = 2000
 mrekk_id = 7562902
 obj_dataset = dataset.user_replay_mapping_from_cache(user_id=mrekk_id, limit=REPLAY_LIMIT)
 

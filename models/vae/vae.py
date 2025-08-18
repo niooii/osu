@@ -1,3 +1,5 @@
+from typing import Optional
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -5,156 +7,111 @@ import torch.nn.functional as F
 import tqdm
 
 import osu.dataset as dataset
-from .annealer import Annealer
-from .base import OsuModel
-
-# Global VAE configuration
-LATENT_DIM = 32
-FUTURE_FRAMES = 70
-PAST_FRAMES = 20
-
-
-class ReplayEncoder(nn.Module):
-    """Encode replay sequence to latent representation"""
-
-    def __init__(self, input_size, latent_dim=32, noise_std=0.0, past_frames=PAST_FRAMES, future_frames=FUTURE_FRAMES):
-        super().__init__()
-        self.past_frames = past_frames
-        self.future_frames = future_frames
-        self.window_size = past_frames + 1 + future_frames  # +1 for current frame
-
-        # Windowed beatmap features + cursor positions
-        combined_size = (input_size * self.window_size) + 2
-
-        self.lstm = nn.LSTM(combined_size, 128, num_layers=2, batch_first=True, dropout=0.2)
-
-        self.dense1 = nn.Linear(128, 128)
-        self.noise_std = noise_std
-        self.dense2 = nn.Linear(128, 64)
-
-        # Output layers for reparameterization trick
-        self.mu_layer = nn.Linear(64, latent_dim)
-        self.logvar_layer = nn.Linear(64, latent_dim)
-
-    def forward(self, beatmap_features, positions):
-        # beatmap_features is now already windowed
-        # gaussian noise during training
-        if self.training and self.noise_std > 0:
-            noise = torch.randn_like(positions) * self.noise_std
-            positions = positions + noise
-
-        # Combine windowed beatmap features with positions
-        x = torch.cat([beatmap_features, positions], dim=-1)
-
-        # Encode sequence
-        _, (h_n, _) = self.lstm(x)
-        h = h_n[-1]  # Use last hidden state
-
-        h = F.relu(self.dense1(h))
-
-        h = F.relu(self.dense2(h))
-
-        # Output mean and log variance for reparameterization trick
-        mu = self.mu_layer(h)
-        logvar = self.logvar_layer(h)
-
-        return mu, logvar
-
-
-# symmetric to the encoder
-class ReplayDecoder(nn.Module):
-    """Decode latent code + beatmap features to cursor positions"""
-
-    def __init__(self, input_size, latent_dim=32, past_frames=PAST_FRAMES, future_frames=FUTURE_FRAMES):
-        super().__init__()
-        self.past_frames = past_frames
-        self.future_frames = future_frames
-        self.window_size = past_frames + 1 + future_frames
-
-        # Windowed beatmap features + latent code
-        combined_size = (input_size * self.window_size) + latent_dim
-
-        # Symmetric layers to encoder (not really almost)
-        self.lstm = nn.LSTM(combined_size, 96, num_layers=2, batch_first=True, dropout=0.3)
-
-        self.dense1 = nn.Linear(96, 96)
-        self.dense2 = nn.Linear(96, 48)
-
-        self.output_layer = nn.Linear(48, 2)  # x, y positions
-
-    def forward(self, beatmap_features, latent_code):
-        batch_size, seq_len, _ = beatmap_features.shape
-
-        # beatmap_features is already windowed
-        # Expand latent code to sequence length
-        latent_expanded = latent_code.unsqueeze(1).expand(-1, seq_len, -1)
-
-        # Combine windowed features with latent code
-        x = torch.cat([beatmap_features, latent_expanded], dim=-1)
-
-        lstm_out, _ = self.lstm(x)
-
-        features = F.relu(self.dense1(lstm_out))
-        features = F.relu(self.dense2(features))
-
-        positions = self.output_layer(features)
-
-        return positions
+from ..annealer import Annealer
+from ..base import OsuModel
+from .encoder import ReplayEncoder
+from .decoder import ReplayDecoder
 
 
 class OsuReplayVAE(OsuModel):
-    def __init__(self, annealer: Annealer = None, batch_size=64, device=None, latent_dim=None, noise_std=0.0):
-        # Store VAE-specific parameters before calling super().__init__
-        self.latent_dim = latent_dim or LATENT_DIM
+    def __init__(
+            self,
+            annealer: Annealer = None,
+            batch_size=64, device=None,
+            latent_dim=48,
+            frame_window=(20, 70),
+            noise_std=0.0
+    ):
+        self.latent_dim = latent_dim
+        self.past_frames = frame_window[0]
+        self.future_frames = frame_window[1]
         self.noise_std = noise_std
         self.annealer = annealer or Annealer(
             total_steps=10,
-            range=(0, 0.001),
+            range=(0, 0.3),
             cyclical=True,
             stay_max_steps=5
         )
-        
-        # Call parent constructor which will call our abstract methods
-        super().__init__(batch_size=batch_size, device=device, 
-                        latent_dim=self.latent_dim, noise_std=noise_std, annealer=self.annealer)
-    
+
+        super().__init__(
+            batch_size=batch_size,
+            device=device,
+            # past_frames=self.past_frames,
+            # future_frames=self.future_frames,
+            # latent_dim=self.latent_dim,
+            # noise_std=noise_std,
+            # annealer=self.annealer
+        )
+
     def _initialize_models(self, **kwargs):
-        """Initialize VAE encoder and decoder models."""
-        self.encoder = ReplayEncoder(self.input_size, self.latent_dim, self.noise_std,
-                                     past_frames=PAST_FRAMES, future_frames=FUTURE_FRAMES)
-        self.decoder = ReplayDecoder(self.input_size, self.latent_dim,
-                                     past_frames=PAST_FRAMES, future_frames=FUTURE_FRAMES)
-    
+        self.encoder = ReplayEncoder(
+            input_size=self.input_size,
+            latent_dim=self.latent_dim,
+            noise_std=self.noise_std,
+            past_frames=self.past_frames,
+            future_frames=self.future_frames
+        )
+        self.decoder = ReplayDecoder(
+            self.input_size,
+            latent_dim=self.latent_dim,
+            past_frames=self.past_frames,
+            future_frames=self.future_frames
+        )
+
     def _initialize_optimizers(self):
         """Initialize VAE optimizer for both encoder and decoder."""
         params = list(self.encoder.parameters()) + list(self.decoder.parameters())
         self.optimizer = optim.AdamW(params, lr=0.001, betas=(0.9, 0.999), weight_decay=0.001)
-    
+
     def _extract_target_data(self, output_data):
         """Extract position data (x, y) from output data for VAE training."""
         return output_data[:, :, :2]  # Take first 2 features (x, y)
-    
-    def _get_target_data_name(self):
-        """Return description of target data type."""
-        return "position only"
 
-    def create_windowed_features(self, beatmap_features):
-        """Convert sequential features to windowed features"""
+    def create_windowed_features_legacy(self, beatmap_features):
         batch_size, seq_len, feat_size = beatmap_features.shape
 
         # Pad the sequence
         padded = F.pad(beatmap_features,
-                       (0, 0, PAST_FRAMES, FUTURE_FRAMES, 0, 0),
-                       mode='constant', value=0)
+                       (0, 0, self.past_frames, self.future_frames, 0, 0),
+                       mode='constant', value=dataset.DEFAULT_NORM_FRAME)
 
         # Create windows
         windows = []
         for i in range(seq_len):
             # Extract window: [past...current...future]
-            window = padded[:, i:i + PAST_FRAMES + 1 + FUTURE_FRAMES, :]
+            window = padded[:, i:i + self.past_frames + 1 + self.future_frames, :]
             # Flatten the window
             window_flat = window.reshape(batch_size, -1)
             windows.append(window_flat)
+
+        return torch.stack(windows, dim=1)
+
+    # i forgot to use default frame :sob:
+    def create_windowed_features(self, beatmap_features):
+        batch_size, seq_len, feat_size = beatmap_features.shape
+
+        default_frame = torch.tensor(dataset.DEFAULT_NORM_FRAME,
+                                     dtype=beatmap_features.dtype,
+                                     device=beatmap_features.device)
+
+        #  left padding for past frames at beginning
+        # 2 unsqueeze calls -> [1, 1, 9]
+        # expand -> [32, past_frames, 9]
+        left_pad = default_frame.unsqueeze(0).unsqueeze(0).expand(batch_size, self.past_frames, feat_size)
+
+        # right padding
+        right_pad = default_frame.unsqueeze(0).unsqueeze(0).expand(batch_size, self.future_frames, feat_size)
+
+        padded = torch.cat([left_pad, beatmap_features, right_pad], dim=1)
+
+        windows = []
+        for i in range(seq_len):
+            # extract window centered at position i ew ew ew wtjh
+            window = padded[:, i:i + self.past_frames + 1 + self.future_frames, :]
+
+            flat = window.reshape(batch_size, -1)
+
+            windows.append(flat)
 
         return torch.stack(windows, dim=1)
 
@@ -244,14 +201,36 @@ class OsuReplayVAE(OsuModel):
             'decoder': self.decoder.state_dict(),
             'latent_dim': self.latent_dim,
             'input_size': self.input_size,
-            'past_frames': PAST_FRAMES,
-            'future_frames': FUTURE_FRAMES
+            'past_frames': self.past_frames,
+            'future_frames': self.future_frames
         }
-    
+
     def _load_state_dict(self, checkpoint):
         """Load state dictionary for VAE model."""
         self.encoder.load_state_dict(checkpoint['encoder'])
         self.decoder.load_state_dict(checkpoint['decoder'])
+
+
+    @classmethod
+    def load(cls, path: str, device: Optional[torch.device] = None, **kwargs):
+        device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        # Load state dict
+        checkpoint = torch.load(path, map_location=device)
+
+        # load hyperparams (should make this automatic sometime)
+        vae_args = {
+            'frame_window': (checkpoint['past_frames'], checkpoint['future_frames']),
+            'latent_dim': checkpoint['latent_dim']
+        }
+
+        instance = cls(device=device, **kwargs, **vae_args)
+
+        instance._load_state_dict(checkpoint)
+        instance._set_eval_mode()
+
+        print(f"{cls.__name__} loaded from {path}")
+        return instance
 
     def generate(self, beatmap_data, num_samples=1, apply_bias_correction=True):
         """Generate position data - returns (x, y) positions"""
@@ -278,20 +257,3 @@ class OsuReplayVAE(OsuModel):
         self._set_train_mode()
 
         return pos.cpu().numpy()
-
-
-    @classmethod  
-    def load(cls, path, device=None, **kwargs):
-        """Load VAE model from checkpoint."""
-        device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        checkpoint = torch.load(path, map_location=device)
-        
-        # Create instance with saved parameters
-        latent_dim = checkpoint.get('latent_dim', LATENT_DIM)
-        vae = cls(device=device, latent_dim=latent_dim, **kwargs)
-        
-        # Load state dict and set to eval mode
-        vae._load_state_dict(checkpoint)
-        # vae._set_eval_mode()
-        print(f"VAE loaded from {path}")
-        return vae
