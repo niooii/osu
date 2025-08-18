@@ -164,6 +164,8 @@ class OsuModel(ABC):
         """
         if self.train_loader is None:
             raise ValueError("No data loaded. Call load_data() first.")
+
+        self._set_train_mode()
         
         for epoch in range(epochs):
             # Train one epoch using subclass-specific logic

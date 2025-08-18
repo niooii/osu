@@ -25,6 +25,7 @@ osu_session = os.getenv("OSU_SESSION")
 
 os.makedirs("../.data/replays", exist_ok=True)
 
+# a lot of room for code reusability here, a bit too lazy though
 
 # TODO we can make this async and then batch the donwloads, but nah im too lazy
 # TODO add cache to map beatmaps to the replays

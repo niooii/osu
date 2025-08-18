@@ -513,7 +513,7 @@ class OsuAIGUI:
                     curr = time.time_ns() / float(1e6)
                     time_passed = curr - last_frame_change_time
                     if prev_frame == frame and time_passed <= REPLAY_SAMPLING_RATE:
-                        # do some extrapolation stuff
+                        # do some extrapolation media
                         if frame == len(frames) - 1:
                             continue
 

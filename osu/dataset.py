@@ -1,3 +1,6 @@
+# TODO! cleanup code and make generation per pair instead of
+# all maps first and then all replays
+
 import math
 import os
 import pickle
@@ -57,6 +60,7 @@ DEFAULT_NORM_FRAME = (
     DEFAULT_SLIDER_LEN
 )
 
+# Beatmap frames are computed one time then accessed later in dataset building
 class MapDataCache:
     @dataclass
     class ObjData:
@@ -438,8 +442,9 @@ def get_beatmap_time_data(beatmap: osu_beatmap.Beatmap) -> []:
             px_raw, py_raw, time_until_click, is_slider, is_spinner, is_note, circle_size, slider_speed, slider_len = DEFAULT_FRAME
         else:
             px_raw, py_raw, time_left, is_slider, is_spinner, is_note, circle_size, slider_speed, slider_len = frame_data
+            # TODO! problems with long spinner maybe?
             time_until_click = max(0, min(time_left / 1000, MAX_TIME_UNTIL_CLICK))
-        
+
         px = max(0, min(px_raw / osu_core.SCREEN_WIDTH, 1))
         py = max(0, min(py_raw / osu_core.SCREEN_HEIGHT, 1))
 
