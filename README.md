@@ -15,7 +15,7 @@ This entire project is largely inspired by (and uses a lot of beatmap processing
 [Adversarial VAE](https://arxiv.org/abs/2012.11551)
 
 # Models
-This repo implements the following models, ranked from worst performing to best:
+This repo implements the following models, ranked from worst performing to best
 
 ## LSTM-based RNN (Recurrent Neural Network)
 Performed very well in-game, but deterministic and very robotic, which isn't the goal. It turned out to be
