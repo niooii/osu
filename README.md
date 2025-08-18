@@ -17,31 +17,30 @@ This entire project is largely inspired by (and uses a lot of beatmap processing
 # Models
 This repo implements the following models, ranked from worst performing to best:
 
-### LSTM-based RNN (Recurrent Neural Network)
+## LSTM-based RNN (Recurrent Neural Network)
 Performed very well in-game, but deterministic and very robotic, which isn't the goal. It turned out to be
-*way* too good at the game.
-![](media/ls4mod.gif)
+*way* too good at the game.  
+![](media/ls4mod.gif)  
 <sub>The RNN playing Logical Stimulus, a known difficult map with all difficulty modifiers</sub>
 
-### GAN (Generative Adversarial Network)
+## GAN (Generative Adversarial Network)
 Ended up performing like the aforementioned RNN, due to mode collapse and the 
 discriminator defaulting to 0.  
 
-### VAE (Variational Autoencoder)
+## VAE (Variational Autoencoder)
 Performed very well in terms of the trajectory
 between notes, and in one rare case, learned to generate realistic spinner movement
 and idle movements. Cannot consistently learn spinner/idle patterns, and has a (known) tendency
 to average out movement patterns.  
-
-![](media/highscore-spinner.gif)
+![](media/highscore-spinner.gif)  
 <sub>The VAE playing through a spinner. Many more examples [here](https://www.youtube.com/watch?v=lKOraHbxjHo&t=5s)</sub>
 
-## Keypress models
+# Keypress models
 There are also models for generating keypresses, alongside the ones that
 generate cursor movement. They are separated for simplicity and ease of training. There's only
 one at the moment:
 
-### LSTM-based RNN
+## LSTM-based RNN
 Works fine, but sometimes will tap twice for trickier sequences.  
 
 ### WIP
