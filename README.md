@@ -44,6 +44,10 @@ one at the moment:
 ### LSTM-based RNN
 Works fine, but sometimes will tap twice for trickier sequences.  
 
+### WIP
+More models are still being implemented, including a WGAN with gradient penalty, and an adversarially
+trained VAE. 
+
 **Model weights will be made public soon, along with datasets.**  
 
 # Replay playback (and running locally)

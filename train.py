@@ -14,7 +14,7 @@ BATCH_SIZE = 128
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-from vae import OsuReplayVAE
+from models.vae.vae import OsuReplayVAE
 print("Creating model...")
 vae = OsuReplayVAE(batch_size=BATCH_SIZE)
 vae.load_data(xs, ys)
