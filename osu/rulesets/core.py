@@ -1,5 +1,3 @@
-import pyautogui
-
 SCREEN_WIDTH = 512
 SCREEN_HEIGHT = 384
 
@@ -14,6 +12,7 @@ print(f'osu! path: {OSU_PATH}')
 
 
 def osu_to_screen_pixel(x, y) -> (int, int):
+    import pyautogui
     w, h = pyautogui.size()
 
     # screen/osu ratio

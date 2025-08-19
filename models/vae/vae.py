@@ -2,35 +2,34 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
-import torch.optim as optim
 import torch.nn.functional as F
-import tqdm
+import torch.optim as optim
+import tqdm.auto as tqdm
 
 import osu.dataset as dataset
+
 from ..annealer import Annealer
 from ..base import OsuModel
-from .encoder import ReplayEncoder
 from .decoder import ReplayDecoder
+from .encoder import ReplayEncoder
 
 
 class OsuReplayVAE(OsuModel):
     def __init__(
-            self,
-            annealer: Annealer = None,
-            batch_size=64, device=None,
-            latent_dim=48,
-            frame_window=(20, 70),
-            noise_std=0.0
+        self,
+        annealer: Annealer = None,
+        batch_size=64,
+        device=None,
+        latent_dim=48,
+        frame_window=(20, 70),
+        noise_std=0.0,
     ):
         self.latent_dim = latent_dim
         self.past_frames = frame_window[0]
         self.future_frames = frame_window[1]
         self.noise_std = noise_std
         self.annealer = annealer or Annealer(
-            total_steps=10,
-            range=(0, 0.3),
-            cyclical=True,
-            stay_max_steps=5
+            total_steps=10, range=(0, 0.3), cyclical=True, stay_max_steps=5
         )
 
         super().__init__(
@@ -49,19 +48,21 @@ class OsuReplayVAE(OsuModel):
             latent_dim=self.latent_dim,
             noise_std=self.noise_std,
             past_frames=self.past_frames,
-            future_frames=self.future_frames
+            future_frames=self.future_frames,
         )
         self.decoder = ReplayDecoder(
             self.input_size,
             latent_dim=self.latent_dim,
             past_frames=self.past_frames,
-            future_frames=self.future_frames
+            future_frames=self.future_frames,
         )
 
     def _initialize_optimizers(self):
         """Initialize VAE optimizer for both encoder and decoder."""
         params = list(self.encoder.parameters()) + list(self.decoder.parameters())
-        self.optimizer = optim.AdamW(params, lr=0.001, betas=(0.9, 0.999), weight_decay=0.001)
+        self.optimizer = optim.AdamW(
+            params, lr=0.001, betas=(0.9, 0.999), weight_decay=0.001
+        )
 
     def _extract_target_data(self, output_data):
         """Extract position data (x, y) from output data for VAE training."""
@@ -71,15 +72,18 @@ class OsuReplayVAE(OsuModel):
         batch_size, seq_len, feat_size = beatmap_features.shape
 
         # Pad the sequence
-        padded = F.pad(beatmap_features,
-                       (0, 0, self.past_frames, self.future_frames, 0, 0),
-                       mode='constant', value=dataset.DEFAULT_NORM_FRAME)
+        padded = F.pad(
+            beatmap_features,
+            (0, 0, self.past_frames, self.future_frames, 0, 0),
+            mode="constant",
+            value=dataset.DEFAULT_NORM_FRAME,
+        )
 
         # Create windows
         windows = []
         for i in range(seq_len):
             # Extract window: [past...current...future]
-            window = padded[:, i:i + self.past_frames + 1 + self.future_frames, :]
+            window = padded[:, i : i + self.past_frames + 1 + self.future_frames, :]
             # Flatten the window
             window_flat = window.reshape(batch_size, -1)
             windows.append(window_flat)
@@ -90,24 +94,34 @@ class OsuReplayVAE(OsuModel):
     def create_windowed_features(self, beatmap_features):
         batch_size, seq_len, feat_size = beatmap_features.shape
 
-        default_frame = torch.tensor(dataset.DEFAULT_NORM_FRAME,
-                                     dtype=beatmap_features.dtype,
-                                     device=beatmap_features.device)
+        default_frame = torch.tensor(
+            dataset.DEFAULT_NORM_FRAME,
+            dtype=beatmap_features.dtype,
+            device=beatmap_features.device,
+        )
 
         #  left padding for past frames at beginning
         # 2 unsqueeze calls -> [1, 1, 9]
         # expand -> [32, past_frames, 9]
-        left_pad = default_frame.unsqueeze(0).unsqueeze(0).expand(batch_size, self.past_frames, feat_size)
+        left_pad = (
+            default_frame.unsqueeze(0)
+            .unsqueeze(0)
+            .expand(batch_size, self.past_frames, feat_size)
+        )
 
         # right padding
-        right_pad = default_frame.unsqueeze(0).unsqueeze(0).expand(batch_size, self.future_frames, feat_size)
+        right_pad = (
+            default_frame.unsqueeze(0)
+            .unsqueeze(0)
+            .expand(batch_size, self.future_frames, feat_size)
+        )
 
         padded = torch.cat([left_pad, beatmap_features, right_pad], dim=1)
 
         windows = []
         for i in range(seq_len):
             # extract window centered at position i ew ew ew wtjh
-            window = padded[:, i:i + self.past_frames + 1 + self.future_frames, :]
+            window = padded[:, i : i + self.past_frames + 1 + self.future_frames, :]
 
             flat = window.reshape(batch_size, -1)
 
@@ -122,9 +136,12 @@ class OsuReplayVAE(OsuModel):
         epoch_kl_loss = 0
 
         for batch_x, batch_y_pos in tqdm.tqdm(
-                self.train_loader,
-                desc=f'Epoch {epoch + 1}/{total_epochs} (Beta: {self.annealer.current()})'
+            self.train_loader,
+            disable=True,
+            position=1,
+            desc=f"Epoch {epoch + 1}/{total_epochs} (Beta: {self.annealer.current()})",
         ):
+            self._set_custom_train_status("doin the thing...")
             batch_x = batch_x.to(self.device)
             batch_y_pos = batch_y_pos.to(self.device)
 
@@ -134,12 +151,16 @@ class OsuReplayVAE(OsuModel):
             reconstructed, mu, logvar = self.forward(batch_x, batch_y_pos)
 
             # Compute loss
-            total_loss, recon_loss, kl_loss = self.loss_function(reconstructed, batch_y_pos, mu, logvar)
+            total_loss, recon_loss, kl_loss = self.loss_function(
+                reconstructed, batch_y_pos, mu, logvar
+            )
 
             # Backward pass
             total_loss.backward()
-            torch.nn.utils.clip_grad_norm_(list(self.encoder.parameters()) + list(self.decoder.parameters()),
-                                           max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(
+                list(self.encoder.parameters()) + list(self.decoder.parameters()),
+                max_norm=1.0,
+            )
             self.optimizer.step()
 
             epoch_total_loss += total_loss.item()
@@ -155,9 +176,9 @@ class OsuReplayVAE(OsuModel):
         self.annealer.step()
 
         return {
-            'total_loss': avg_total_loss,
-            'recon_loss': avg_recon_loss,
-            'kl_loss': avg_kl_loss
+            "total_loss": avg_total_loss,
+            "recon_loss": avg_recon_loss,
+            "kl_loss": avg_kl_loss,
         }
 
     def reparameterize(self, mu, logvar):
@@ -185,7 +206,7 @@ class OsuReplayVAE(OsuModel):
     def loss_function(self, reconstructed, original, mu, logvar):
         """VAE loss: reconstruction + KL divergence"""
         # Reconstruction loss (sum reduction for proper VAE training)
-        recon_loss = F.mse_loss(reconstructed, original, reduction='sum')
+        recon_loss = F.mse_loss(reconstructed, original, reduction="sum")
 
         kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
         kld /= original.shape[0]
@@ -197,19 +218,18 @@ class OsuReplayVAE(OsuModel):
     def _get_state_dict(self):
         """Get state dictionary for saving VAE model."""
         return {
-            'encoder': self.encoder.state_dict(),
-            'decoder': self.decoder.state_dict(),
-            'latent_dim': self.latent_dim,
-            'input_size': self.input_size,
-            'past_frames': self.past_frames,
-            'future_frames': self.future_frames
+            "encoder": self.encoder.state_dict(),
+            "decoder": self.decoder.state_dict(),
+            "latent_dim": self.latent_dim,
+            "input_size": self.input_size,
+            "past_frames": self.past_frames,
+            "future_frames": self.future_frames,
         }
 
     def _load_state_dict(self, checkpoint):
         """Load state dictionary for VAE model."""
-        self.encoder.load_state_dict(checkpoint['encoder'])
-        self.decoder.load_state_dict(checkpoint['decoder'])
-
+        self.encoder.load_state_dict(checkpoint["encoder"])
+        self.decoder.load_state_dict(checkpoint["decoder"])
 
     @classmethod
     def load(cls, path: str, device: Optional[torch.device] = None, **kwargs):
@@ -220,8 +240,8 @@ class OsuReplayVAE(OsuModel):
 
         # load hyperparams (should make this automatic sometime)
         vae_args = {
-            'frame_window': (checkpoint['past_frames'], checkpoint['future_frames']),
-            'latent_dim': checkpoint['latent_dim']
+            "frame_window": (checkpoint["past_frames"], checkpoint["future_frames"]),
+            "latent_dim": checkpoint["latent_dim"],
         }
 
         instance = cls(device=device, **kwargs, **vae_args)
@@ -251,7 +271,7 @@ class OsuReplayVAE(OsuModel):
             pos = self.decoder(windowed_features, z)
 
             # Apply bias correction if enabled and bias is stored
-            if apply_bias_correction and hasattr(self, 'coordinate_bias'):
+            if apply_bias_correction and hasattr(self, "coordinate_bias"):
                 pos = pos - torch.tensor(self.coordinate_bias, device=self.device)
 
         self._set_train_mode()

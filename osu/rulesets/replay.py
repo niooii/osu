@@ -1,8 +1,5 @@
 import lzma
 import time
-import matplotlib.pyplot as plt
-from matplotlib.path import Path
-import matplotlib.patches as mpatches
 
 from enum import IntFlag
 
