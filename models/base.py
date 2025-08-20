@@ -195,8 +195,7 @@ class OsuModel(ABC):
 
         for epoch in self.train_iterator:
             self.train_iterator.set_description(
-                f"[Epoch]: {epoch}"
-                + (f" \n[Previous]: {loss_str}" if loss_str is not None else "")
+                f"[Epoch]: {epoch}" + (f" | {loss_str}" if loss_str is not None else "")
             )
             # Train one epoch using subclass-specific logic
             epoch_losses = self._train_epoch(epoch, epochs, **kwargs)

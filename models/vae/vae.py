@@ -135,13 +135,15 @@ class OsuReplayVAE(OsuModel):
         epoch_recon_loss = 0
         epoch_kl_loss = 0
 
-        for batch_x, batch_y_pos in tqdm.tqdm(
-            self.train_loader,
-            disable=True,
-            position=1,
-            desc=f"Epoch {epoch + 1}/{total_epochs} (Beta: {self.annealer.current()})",
+        for i, (batch_x, batch_y_pos) in enumerate(
+            tqdm.tqdm(
+                self.train_loader,
+                disable=True,
+                position=1,
+                desc=f"Epoch {epoch + 1}/{total_epochs} (Beta: {self.annealer.current()})",
+            )
         ):
-            self._set_custom_train_status("doin the thing...")
+            self._set_custom_train_status(f"Batch {i}/{len(self.train_loader)}")
             batch_x = batch_x.to(self.device)
             batch_y_pos = batch_y_pos.to(self.device)
 
