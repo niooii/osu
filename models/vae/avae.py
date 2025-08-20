@@ -195,7 +195,35 @@ class OsuReplayAVAE(OsuReplayVAE):
             # train the critic for n steps per epoch
             for i in range(self.critic_steps):
                 self._set_custom_train_status(status_prefix + f"Critic: {i}/{self.critic_steps}")
-                continue
+                with torch.no_grad():
+                    # (B, L), (B, L), L = latent dim
+                    mu_c, logvar_c = self.encoder(windowed, batch_y_pos)
+
+                    # (B, L)
+                    z_c = self.reparameterize(mu_c, logvar_c)
+
+                # sample xi noise for generator
+                # (B, xi_dim)
+                xi_c = torch.randn(B, self.xi_dim, device=device)
+
+                # (B, T, 2)
+                fake_pos = self.generator(windowed, z_c, xi_c).detach()
+
+                # (B,)
+                real_score = self.critic(windowed, batch_y_pos)
+                # (B,)
+                fake_score = self.critic(windowed, fake_pos)
+
+                # lambda term is already multiplied in here
+                gp = self.gradient_penalty(windowed, real_pos=batch_y_pos, fake_pos=fake_pos, device=device, lambda_gp=10) 
+
+                # total wgan-gp critic loss
+                loss_C = -(real_score.mean() - fake_score.mean()) + gp
+
+                self.opt_C.zero_grad()
+                loss_C.backward()
+                self.opt_C.step()
+
                 critic_loss_accum += loss_C.item()
                 
             epoch_C_loss += critic_loss_accum / max(1, self.critic_steps)
