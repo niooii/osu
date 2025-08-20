@@ -14,7 +14,7 @@ from ..annealer import Annealer
 # as per the avae paper (https://arxiv.org/pdf/2012.11551), there are seperate generator/decoder models. 
 # however the arch is pretty much the same, except there are additional noise dimensions alongside the original latent dims
 class ReplayGenerator(ReplayDecoder):
-    def __init__(self, input_size, latent_dim=48, xi_dim=16):
+    def __init__(self, input_size, latent_dim=48, xi_dim=16, **kwargs):
         super().__init__(input_size=input_size, latent_dim=latent_dim + xi_dim, **kwargs)
 
     # z: (B, latent_dim), xi: (B, xi_dim)
@@ -38,15 +38,9 @@ class ReplayCritic(nn.Module):
         )
 
     def forward(self, windowed, positions):
-        """
-        windowed:  (B, T, window_feat_dim)
-        positions: (B, T, 2)
-        returns:   (B,) scalar scores
-        """
         proj = self.proj(windowed)                 # (B, T, P)
         x = torch.cat([proj, positions], dim=-1)   # (B, T, P+2)
         hseq, _ = self.lstm(x)                     # (B, T, H)
-        # Mean pool over time; you can try attention later
         h = hseq.mean(dim=1)                       # (B, H)
         score = self.mlp(h).squeeze(-1)            # (B,)
         return score
@@ -86,7 +80,6 @@ class OsuReplayAVAE(OsuReplayVAE):
         super().__init__(annealer=annealer, batch_size=batch_size, device=device,
                          latent_dim=latent_dim, frame_window=frame_window, noise_std=noise_std)
 
-    # ---------- init ----------
     def _initialize_models(self, **kwargs):
         # get the encoder & decoder from parent
         super()._initialize_models(**kwargs)
@@ -143,6 +136,38 @@ class OsuReplayAVAE(OsuReplayVAE):
     # in case the VAE (encoder/decoder nets) aren't loaded from pretrained weights, train them using this
     def train_vae_nets(self, **kwargs):
         super().train(**kwargs)
+        
+    # calculates the gradient penalty loss - we encourage the model to stay 1-lipschitz so it can better estimate the
+    # wasserstein dist
+    def gradient_penalty(self, windowed, real_pos, fake_pos, device, lambda_gp=10.0):
+        B = real_pos.shape[0]
+        # alpha (B,1,1) will broadcast across (T,2)
+        alpha = torch.rand(B, 1, 1, device=device)
+
+        # interpolation in position space
+        # (B, T, 2)
+        x = (alpha * real_pos + (1.0 - alpha) * fake_pos).requires_grad_(True)
+
+        # (B,)
+        C_x = self.critic(windowed, x)
+
+        # compute gradients of outputs wrt interpolated positions
+        # (this works since the gradient distributes)
+        # (B, T, 2)
+        grads = torch.autograd.grad(
+            outputs=C_x.sum(),
+            inputs=x,
+            create_graph=True,
+            retain_graph=True,
+            only_inputs=True
+        )[0]
+
+        # flatten per-sample gradients and compute L2 norm per sample
+        # (B,)
+        grad_norm = grads.reshape(B, -1).norm(2, dim=1)
+
+        gp = ((grad_norm - 1.0) ** 2).mean() * lambda_gp
+        return gp 
 
     # overwrite base vae training function (this assumes the VAE has been pretrained, trains the generator and critic)
     def _train_epoch(self, epoch, total_epochs, **kwargs):
@@ -166,6 +191,8 @@ class OsuReplayAVAE(OsuReplayVAE):
             windowed = self.create_windowed_features(batch_x)
 
             critic_loss_accum = 0.0
+            
+            # train the critic for n steps per epoch
             for i in range(self.critic_steps):
                 self._set_custom_train_status(status_prefix + f"Critic: {i}/{self.critic_steps}")
                 continue
@@ -186,3 +213,4 @@ class OsuReplayAVAE(OsuReplayVAE):
         }
 
     # inference is the same as the VAE base class, using the decoder
+    # TODO! wait no we want to use the generator 

@@ -144,8 +144,8 @@ class OsuReplayVAE(OsuModel):
             )
         ):
             self._set_custom_train_status(f"Batch {i}/{len(self.train_loader)}")
-            batch_x = batch_x.to(self.device)
-            batch_y_pos = batch_y_pos.to(self.device)
+            batch_x = batch_x.to(self.device)             # (B, T, features)
+            batch_y_pos = batch_y_pos.to(self.device)     # (B, T, pos)
 
             self.optimizer.zero_grad()
 
@@ -269,12 +269,7 @@ class OsuReplayVAE(OsuModel):
             # Sample from prior distribution
             z = torch.randn(batch_size, self.latent_dim, device=self.device)
 
-            # Generate positions with windowed features
             pos = self.decoder(windowed_features, z)
-
-            # Apply bias correction if enabled and bias is stored
-            if apply_bias_correction and hasattr(self, "coordinate_bias"):
-                pos = pos - torch.tensor(self.coordinate_bias, device=self.device)
 
         self._set_train_mode()
 
