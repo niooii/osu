@@ -100,9 +100,7 @@ class OsuReplayGAN(OsuModel):
             real_labels = torch.ones(batch_size, 1, device=self.device)
             fake_labels = torch.zeros(batch_size, 1, device=self.device)
 
-            # ---------------------
-            #  Train Discriminator
-            # ---------------------
+            #  Train the discriminator
             self.disc_optimizer.zero_grad()
 
             # Real data
@@ -122,9 +120,7 @@ class OsuReplayGAN(OsuModel):
             torch.nn.utils.clip_grad_norm_(self.discriminator.parameters(), max_norm=1.0)
             self.disc_optimizer.step()
 
-            # -----------------
-            #  Train Generator
-            # -----------------
+            #  Train generator
             self.gen_optimizer.zero_grad()
 
             # Generate fake position data

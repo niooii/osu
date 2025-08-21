@@ -23,6 +23,7 @@ class OsuReplayVAE(OsuModel):
         latent_dim=48,
         frame_window=(20, 70),
         noise_std=0.0,
+        compile: bool = True
     ):
         self.latent_dim = latent_dim
         self.past_frames = frame_window[0]
@@ -35,6 +36,7 @@ class OsuReplayVAE(OsuModel):
         super().__init__(
             batch_size=batch_size,
             device=device,
+            compile=compile
             # past_frames=self.past_frames,
             # future_frames=self.future_frames,
             # latent_dim=self.latent_dim,

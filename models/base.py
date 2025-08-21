@@ -20,13 +20,14 @@ class OsuModel(ABC):
     """
 
     def __init__(
-        self, batch_size: int = 64, device: Optional[torch.device] = None, **kwargs
+        self, batch_size: int = 64, device: Optional[torch.device] = None, compile: bool = True, **kwargs
     ):
         self.device = device or torch.device(
             "cuda" if torch.cuda.is_available() else "cpu"
         )
         self.batch_size = batch_size
         self.input_size = len(dataset.INPUT_FEATURES)
+        self.compile = compile
 
         # set by load_data
         self.train_loader: Optional[DataLoader] = None
@@ -328,6 +329,25 @@ class OsuModel(ABC):
         print(f"{cls.__name__} loaded from {path}")
         return instance
 
+    # Helper functions for freezing parameters/entire models
+
+
+    @staticmethod
+    def set_requires_grad(model: nn.Module, requires_grad: bool):
+        for p in model.parameters():
+            p.requires_grad = requires_grad
+
+    @staticmethod
+    def freeze_model(model: nn.Module):
+        OsuModel.set_requires_grad(model, False)
+        model.eval()
+
+    @staticmethod
+    def unfreeze_model(model: nn.Module):
+        OsuModel.set_requires_grad(model, True)
+        model.train()
+
+
     # Helper methods that subclasses can override if needed
 
     def _setup_device_and_compilation(self):
@@ -337,7 +357,7 @@ class OsuModel(ABC):
             if isinstance(attr, nn.Module):
                 attr.to(self.device)
 
-                if hasattr(torch, "compile"):
+                if self.compile and hasattr(torch, "compile"):
                     compiled_attr = torch.compile(attr)
                     setattr(self, attr_name, compiled_attr)
 

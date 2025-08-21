@@ -57,9 +57,9 @@ class OsuReplayAVAE(OsuReplayVAE):
             noise_std=0.0,
             xi_dim=16,
             critic_steps=5,
-            lambda_gp=10.0,
-            gamma_enc_adv=0.1,    # weight for encoder adversarial term
-            beta_consistency=1.0, # weight for G-D consistency loss
+            lambda_gp=10.0,  # weight for gradient penalty
+            lambda_cons=1.0, # weight for G-C consistency loss
+            lambda_pos=1.0,  # weight for position loss via mse
             lr_vae=1e-4,
             lr_g=1e-4,
             lr_c=1e-4,
@@ -69,8 +69,8 @@ class OsuReplayAVAE(OsuReplayVAE):
         self.xi_dim = xi_dim
         self.critic_steps = critic_steps
         self.lambda_gp = lambda_gp
-        self.gamma_enc_adv = gamma_enc_adv
-        self.beta_consistency = beta_consistency
+        self.lambda_cons = lambda_cons
+        self.lambda_pos = lambda_pos
         self.lr_vae = lr_vae
         self.lr_g = lr_g
         self.lr_c = lr_c
@@ -78,7 +78,7 @@ class OsuReplayAVAE(OsuReplayVAE):
         self.betas_gan = betas_gan
 
         super().__init__(annealer=annealer, batch_size=batch_size, device=device,
-                         latent_dim=latent_dim, frame_window=frame_window, noise_std=noise_std)
+                         latent_dim=latent_dim, frame_window=frame_window, noise_std=noise_std, compile=False)
 
     def _initialize_models(self, **kwargs):
         # get the encoder & decoder from parent
@@ -106,9 +106,9 @@ class OsuReplayAVAE(OsuReplayVAE):
         )
 
     def _initialize_optimizers(self):
-        pass
+        self.opt_G = optim.AdamW(self.generator.parameters(), lr=1e-4)
+        self.opt_C = optim.AdamW(self.critic.parameters(), lr=1e-4)
         
-    # ---------- save/load ----------
     def _get_state_dict(self):
         sd = super()._get_state_dict()
         sd.update({
@@ -116,8 +116,7 @@ class OsuReplayAVAE(OsuReplayVAE):
             'xi_dim': self.xi_dim,
             'critic_steps': self.critic_steps,
             'lambda_gp': self.lambda_gp,
-            'gamma_enc_adv': self.gamma_enc_adv,
-            'beta_consistency': self.beta_consistency,
+            # TODO! save more properties
         })
         return sd
 
@@ -135,6 +134,8 @@ class OsuReplayAVAE(OsuReplayVAE):
             
     # in case the VAE (encoder/decoder nets) aren't loaded from pretrained weights, train them using this
     def train_vae_nets(self, **kwargs):
+        self.unfreeze_model(model=self.encoder)
+        self.unfreeze_model(model=self.decoder)
         super().train(**kwargs)
         
     # calculates the gradient penalty loss - we encourage the model to stay 1-lipschitz so it can better estimate the
@@ -179,11 +180,17 @@ class OsuReplayAVAE(OsuReplayVAE):
 
         device = self.device or torch.device("cpu")
 
+        # freeze encoder and decoder, assuming theyve been pretrained
+        self.freeze_model(model=self.encoder)
+        self.freeze_model(model=self.decoder)
+
         for i, (batch_x, batch_y_pos) in enumerate(self.train_loader): 
             status_prefix = f"{i}/{len(self.train_loader)} "
             self._set_custom_train_status(status_prefix)
+
             batch_x = batch_x.to(device)
             batch_y_pos = batch_y_pos.to(device)
+
             # BATCH SIZE
             B = batch_x.shape[0]
 
@@ -192,22 +199,24 @@ class OsuReplayAVAE(OsuReplayVAE):
 
             critic_loss_accum = 0.0
             
+            with torch.no_grad():
+                    # (B, L), (B, L), L = latent dim
+                    mu, logvar = self.encoder(windowed, batch_y_pos)
+
+                    # (B, L)
+                    z = self.reparameterize(mu, logvar)
+            
             # train the critic for n steps per epoch
             for i in range(self.critic_steps):
                 self._set_custom_train_status(status_prefix + f"Critic: {i}/{self.critic_steps}")
-                with torch.no_grad():
-                    # (B, L), (B, L), L = latent dim
-                    mu_c, logvar_c = self.encoder(windowed, batch_y_pos)
-
-                    # (B, L)
-                    z_c = self.reparameterize(mu_c, logvar_c)
+                
 
                 # sample xi noise for generator
                 # (B, xi_dim)
                 xi_c = torch.randn(B, self.xi_dim, device=device)
 
                 # (B, T, 2)
-                fake_pos = self.generator(windowed, z_c, xi_c).detach()
+                fake_pos = self.generator(windowed, z, xi_c).detach()
 
                 # (B,)
                 real_score = self.critic(windowed, batch_y_pos)
@@ -218,24 +227,42 @@ class OsuReplayAVAE(OsuReplayVAE):
                 gp = self.gradient_penalty(windowed, real_pos=batch_y_pos, fake_pos=fake_pos, device=device, lambda_gp=10) 
 
                 # total wgan-gp critic loss
-                loss_C = -(real_score.mean() - fake_score.mean()) + gp
+                loss = -(real_score.mean() - fake_score.mean()) + gp
 
                 self.opt_C.zero_grad()
-                loss_C.backward()
+                loss.backward()
                 self.opt_C.step()
 
-                critic_loss_accum += loss_C.item()
+                critic_loss_accum += loss.item()
+
+            # train the generator now
+            self._set_custom_train_status(status_prefix + f"Generator")
+
+            xi = torch.randn(B, self.xi_dim, device=device)
+            fake = self.generator(windowed, z, xi)                # no detach -> grads to generator
+
+            # TODO! add consistency loss prob
+            adv_loss = -self.critic(windowed, fake).mean()
+            pos_loss = F.smooth_l1_loss(fake, batch_y_pos, reduction='mean')
+
+            gen_loss = adv_loss + self.lambda_pos * pos_loss
+            
+            self.opt_G.zero_grad(); 
+            gen_loss.backward(); 
+            self.opt_G.step()
+
                 
             epoch_C_loss += critic_loss_accum / max(1, self.critic_steps)
 
         # anneal KL at epoch end
-        self.annealer.step()
+        # not training the VAE though, maybe itll help idk
+        # self.annealer.step()
 
         nb = len(self.train_loader)
         return {
             'total': epoch_total_loss / nb,
             'recon': epoch_recon_loss / nb,
-            'kl': epoch_kl_loss / nb,
+            # 'kl': epoch_kl_loss / nb,
             'gen': epoch_G_loss / nb,
             'critic': epoch_C_loss / nb
         }
