@@ -10,6 +10,7 @@ from models.vae.vae import OsuReplayVAE
 from models.vae.decoder import ReplayDecoder
 import osu.dataset as dataset
 from ..annealer import Annealer
+from torch.cuda.amp import autocast, GradScaler
 
 # as per the avae paper (https://arxiv.org/pdf/2012.11551), there are seperate generator/decoder models. 
 # however the arch is pretty much the same, except there are additional noise dimensions alongside the original latent dims
@@ -25,7 +26,7 @@ class ReplayGenerator(ReplayDecoder):
 
 class ReplayCritic(nn.Module):
     # avoids BatchNorm and uses LayerNorm and pooling over time.
-    def __init__(self, window_feat_dim, proj_dim=64, lstm_hidden=256, n_layers=2):
+    def __init__(self, window_feat_dim, proj_dim=64, lstm_hidden=128, n_layers=2):
         super().__init__()
         self.proj = nn.Linear(window_feat_dim, proj_dim)  # compress large windowed features
         self.lstm = nn.LSTM(input_size=proj_dim + 2, hidden_size=lstm_hidden,
@@ -56,7 +57,7 @@ class OsuReplayAVAE(OsuReplayVAE):
             frame_window=(20, 70),
             noise_std=0.0,
             xi_dim=16,
-            critic_steps=5,
+            critic_steps=3,
             lambda_gp=10.0,  # weight for gradient penalty
             lambda_cons=1.0, # weight for G-C consistency loss
             lambda_pos=1.0,  # weight for position loss via mse
@@ -79,6 +80,8 @@ class OsuReplayAVAE(OsuReplayVAE):
 
         super().__init__(annealer=annealer, batch_size=batch_size, device=device,
                          latent_dim=latent_dim, frame_window=frame_window, noise_std=noise_std, compile=False)
+        self.scaler_C = GradScaler()
+        self.scaler_G = GradScaler()
 
     def _initialize_models(self, **kwargs):
         # get the encoder & decoder from parent
@@ -121,6 +124,12 @@ class OsuReplayAVAE(OsuReplayVAE):
         return sd
 
     def _load_state_dict(self, checkpoint):
+        # Strip compile prefixes since AVAE uses compile=False but checkpoint is from compiled model
+        if 'encoder' in checkpoint:
+            checkpoint['encoder'] = {k.replace('_orig_mod.', ''): v for k, v in checkpoint['encoder'].items()}
+        if 'decoder' in checkpoint:
+            checkpoint['decoder'] = {k.replace('_orig_mod.', ''): v for k, v in checkpoint['decoder'].items()}
+            
         super()._load_state_dict(checkpoint)
         if 'generator' in checkpoint:
             self.generator.load_state_dict(checkpoint['generator'])
@@ -150,7 +159,8 @@ class OsuReplayAVAE(OsuReplayVAE):
         x = (alpha * real_pos + (1.0 - alpha) * fake_pos).requires_grad_(True)
 
         # (B,)
-        C_x = self.critic(windowed, x)
+        with torch.backends.cudnn.flags(enabled=False):
+            C_x = self.critic(windowed, x)
 
         # compute gradients of outputs wrt interpolated positions
         # (this works since the gradient distributes)
@@ -168,6 +178,10 @@ class OsuReplayAVAE(OsuReplayVAE):
         grad_norm = grads.reshape(B, -1).norm(2, dim=1)
 
         gp = ((grad_norm - 1.0) ** 2).mean() * lambda_gp
+
+        del grads, grad_norm, C_x, x
+        torch.cuda.empty_cache()
+
         return gp 
 
     # overwrite base vae training function (this assumes the VAE has been pretrained, trains the generator and critic)
@@ -209,47 +223,49 @@ class OsuReplayAVAE(OsuReplayVAE):
             # train the critic for n steps per epoch
             for i in range(self.critic_steps):
                 self._set_custom_train_status(status_prefix + f"Critic: {i}/{self.critic_steps}")
+                with autocast():
+                    # sample xi noise for generator
+                    # (B, xi_dim)
+                    xi_c = torch.randn(B, self.xi_dim, device=device)
+
+                    # (B, T, 2)
+                    fake_pos = self.generator(windowed, z, xi_c).detach()
+
+                    # (B,)
+                    real_score = self.critic(windowed, batch_y_pos)
+                    # (B,)
+                    fake_score = self.critic(windowed, fake_pos)
+
+                    # lambda term is already multiplied in here
+                    gp = self.gradient_penalty(windowed, real_pos=batch_y_pos, fake_pos=fake_pos, device=device, lambda_gp=10) 
+
+                    # total wgan-gp critic loss
+                    loss = -(real_score.mean() - fake_score.mean()) + gp
                 
-
-                # sample xi noise for generator
-                # (B, xi_dim)
-                xi_c = torch.randn(B, self.xi_dim, device=device)
-
-                # (B, T, 2)
-                fake_pos = self.generator(windowed, z, xi_c).detach()
-
-                # (B,)
-                real_score = self.critic(windowed, batch_y_pos)
-                # (B,)
-                fake_score = self.critic(windowed, fake_pos)
-
-                # lambda term is already multiplied in here
-                gp = self.gradient_penalty(windowed, real_pos=batch_y_pos, fake_pos=fake_pos, device=device, lambda_gp=10) 
-
-                # total wgan-gp critic loss
-                loss = -(real_score.mean() - fake_score.mean()) + gp
-
                 self.opt_C.zero_grad()
-                loss.backward()
-                self.opt_C.step()
+                self.scaler_C.scale(loss).backward()  # Scale the loss for fp16
+                self.scaler_C.step(self.opt_C)
+                self.scaler_C.update()
+                torch.cuda.empty_cache()
 
                 critic_loss_accum += loss.item()
 
             # train the generator now
             self._set_custom_train_status(status_prefix + f"Generator")
+            with autocast():
+                xi = torch.randn(B, self.xi_dim, device=device)
+                fake = self.generator(windowed, z, xi)                # no detach -> grads to generator
 
-            xi = torch.randn(B, self.xi_dim, device=device)
-            fake = self.generator(windowed, z, xi)                # no detach -> grads to generator
+                # TODO! add consistency loss prob
+                adv_loss = -self.critic(windowed, fake).mean()
+                pos_loss = F.smooth_l1_loss(fake, batch_y_pos, reduction='mean')
 
-            # TODO! add consistency loss prob
-            adv_loss = -self.critic(windowed, fake).mean()
-            pos_loss = F.smooth_l1_loss(fake, batch_y_pos, reduction='mean')
-
-            gen_loss = adv_loss + self.lambda_pos * pos_loss
+                gen_loss = adv_loss + self.lambda_pos * pos_loss
             
-            self.opt_G.zero_grad(); 
-            gen_loss.backward(); 
-            self.opt_G.step()
+            self.opt_G.zero_grad()
+            self.scaler_G.scale(gen_loss).backward()
+            self.scaler_G.step(self.opt_G)
+            self.scaler_G.update()
 
                 
             epoch_C_loss += critic_loss_accum / max(1, self.critic_steps)
