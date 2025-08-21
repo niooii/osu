@@ -116,6 +116,7 @@ class OsuReplayAVAE(OsuReplayVAE):
             'xi_dim': self.xi_dim,
             'critic_steps': self.critic_steps,
             'lambda_gp': self.lambda_gp,
+            'generator': self.generator.state_dict()
             # TODO! save more properties
         })
         return sd
