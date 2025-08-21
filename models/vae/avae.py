@@ -10,7 +10,6 @@ from models.vae.vae import OsuReplayVAE
 from models.vae.decoder import ReplayDecoder
 import osu.dataset as dataset
 from ..annealer import Annealer
-from torch.cuda.amp import autocast, GradScaler
 
 # as per the avae paper (https://arxiv.org/pdf/2012.11551), there are seperate generator/decoder models. 
 # however the arch is pretty much the same, except there are additional noise dimensions alongside the original latent dims
@@ -80,8 +79,6 @@ class OsuReplayAVAE(OsuReplayVAE):
 
         super().__init__(annealer=annealer, batch_size=batch_size, device=device,
                          latent_dim=latent_dim, frame_window=frame_window, noise_std=noise_std, compile=False)
-        self.scaler_C = GradScaler()
-        self.scaler_G = GradScaler()
 
     def _initialize_models(self, **kwargs):
         # get the encoder & decoder from parent
@@ -180,7 +177,6 @@ class OsuReplayAVAE(OsuReplayVAE):
         gp = ((grad_norm - 1.0) ** 2).mean() * lambda_gp
 
         del grads, grad_norm, C_x, x
-        torch.cuda.empty_cache()
 
         return gp 
 
@@ -198,8 +194,8 @@ class OsuReplayAVAE(OsuReplayVAE):
         self.freeze_model(model=self.encoder)
         self.freeze_model(model=self.decoder)
 
-        for i, (batch_x, batch_y_pos) in enumerate(self.train_loader): 
-            status_prefix = f"{i}/{len(self.train_loader)} "
+        for j, (batch_x, batch_y_pos) in enumerate(self.train_loader): 
+            status_prefix = f"{j}/{len(self.train_loader)} "
             self._set_custom_train_status(status_prefix)
 
             batch_x = batch_x.to(device)
@@ -223,52 +219,51 @@ class OsuReplayAVAE(OsuReplayVAE):
             # train the critic for n steps per epoch
             for i in range(self.critic_steps):
                 self._set_custom_train_status(status_prefix + f"Critic: {i}/{self.critic_steps}")
-                with autocast():
-                    # sample xi noise for generator
-                    # (B, xi_dim)
-                    xi_c = torch.randn(B, self.xi_dim, device=device)
-
-                    # (B, T, 2)
-                    fake_pos = self.generator(windowed, z, xi_c).detach()
-
-                    # (B,)
-                    real_score = self.critic(windowed, batch_y_pos)
-                    # (B,)
-                    fake_score = self.critic(windowed, fake_pos)
-
-                    # lambda term is already multiplied in here
-                    gp = self.gradient_penalty(windowed, real_pos=batch_y_pos, fake_pos=fake_pos, device=device, lambda_gp=10) 
-
-                    # total wgan-gp critic loss
-                    loss = -(real_score.mean() - fake_score.mean()) + gp
                 
+
+                # sample xi noise for generator
+                # (B, xi_dim)
+                xi_c = torch.randn(B, self.xi_dim, device=device)
+
+                # (B, T, 2)
+                fake_pos = self.generator(windowed, z, xi_c).detach()
+
+                # (B,)
+                real_score = self.critic(windowed, batch_y_pos)
+                # (B,)
+                fake_score = self.critic(windowed, fake_pos)
+
+                # lambda term is already multiplied in here
+                gp = self.gradient_penalty(windowed, real_pos=batch_y_pos, fake_pos=fake_pos, device=device, lambda_gp=10) 
+
+                # total wgan-gp critic loss
+                loss = -(real_score.mean() - fake_score.mean()) + gp
+
                 self.opt_C.zero_grad()
-                self.scaler_C.scale(loss).backward()  # Scale the loss for fp16
-                self.scaler_C.step(self.opt_C)
-                self.scaler_C.update()
-                torch.cuda.empty_cache()
+                loss.backward()
+                self.opt_C.step()
 
                 critic_loss_accum += loss.item()
 
             # train the generator now
             self._set_custom_train_status(status_prefix + f"Generator")
-            with autocast():
-                xi = torch.randn(B, self.xi_dim, device=device)
-                fake = self.generator(windowed, z, xi)                # no detach -> grads to generator
 
-                # TODO! add consistency loss prob
-                adv_loss = -self.critic(windowed, fake).mean()
-                pos_loss = F.smooth_l1_loss(fake, batch_y_pos, reduction='mean')
+            xi = torch.randn(B, self.xi_dim, device=device)
+            fake = self.generator(windowed, z, xi)                # no detach -> grads to generator
 
-                gen_loss = adv_loss + self.lambda_pos * pos_loss
+            # TODO! add consistency loss prob
+            adv_loss = -self.critic(windowed, fake).mean()
+            pos_loss = F.smooth_l1_loss(fake, batch_y_pos, reduction='mean')
+
+            gen_loss = adv_loss + self.lambda_pos * pos_loss
             
-            self.opt_G.zero_grad()
-            self.scaler_G.scale(gen_loss).backward()
-            self.scaler_G.step(self.opt_G)
-            self.scaler_G.update()
+            self.opt_G.zero_grad(); 
+            gen_loss.backward(); 
+            self.opt_G.step()
 
                 
             epoch_C_loss += critic_loss_accum / max(1, self.critic_steps)
+            epoch_G_loss += gen_loss.item()
 
         # anneal KL at epoch end
         # not training the VAE though, maybe itll help idk
