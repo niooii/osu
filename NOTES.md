@@ -13,3 +13,5 @@ Notes for stuff related to this project, mostly for myself
 
 # other resources
 - Sliding window transformer: https://www.youtube.com/watch?v=it0iZ93aLs4
+
+yo detach the tensor for gradient penalty: https://discuss.pytorch.org/t/wgan-gradient-penalty-error-even-with-retain-graph-true/113266/4
