@@ -60,16 +60,12 @@ class OsuReplayVAE(OsuModel):
         )
 
     def _initialize_optimizers(self):
-        """Initialize VAE optimizer for both encoder and decoder."""
         params = list(self.encoder.parameters()) + list(self.decoder.parameters())
         self.optimizer = optim.AdamW(
             params, lr=0.001, betas=(0.9, 0.999), weight_decay=0.001
         )
 
-    def _extract_target_data(self, output_data):
-        """Extract position data (x, y) from output data for VAE training."""
-        return output_data[:, :, :2]  # Take first 2 features (x, y)
-
+    # like attention but worse..
     def create_windowed_features_legacy(self, beatmap_features):
         batch_size, seq_len, feat_size = beatmap_features.shape
 
@@ -132,7 +128,6 @@ class OsuReplayVAE(OsuModel):
         return torch.stack(windows, dim=1)
 
     def _train_epoch(self, epoch, total_epochs, **kwargs):
-        """Train VAE for one epoch."""
         epoch_total_loss = 0
         epoch_recon_loss = 0
         epoch_kl_loss = 0
@@ -185,14 +180,13 @@ class OsuReplayVAE(OsuModel):
             "kl_loss": avg_kl_loss,
         }
 
+    # allow backpropogatino through sampling
     def reparameterize(self, mu, logvar):
-        """Reparameterization trick for backpropagation through sampling"""
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)
         return mu + eps * std
 
     def forward(self, beatmap_features, positions):
-        """Forward pass through VAE"""
         # Create windowed features
         windowed_features = self.create_windowed_features(beatmap_features)
 
@@ -207,9 +201,8 @@ class OsuReplayVAE(OsuModel):
 
         return reconstructed, mu, logvar
 
+    # recon + kl term
     def loss_function(self, reconstructed, original, mu, logvar):
-        """VAE loss: reconstruction + KL divergence"""
-        # Reconstruction loss (sum reduction for proper VAE training)
         recon_loss = F.mse_loss(reconstructed, original, reduction="sum")
 
         kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
@@ -220,7 +213,6 @@ class OsuReplayVAE(OsuModel):
         return total_loss, recon_loss, kld
 
     def _get_state_dict(self):
-        """Get state dictionary for saving VAE model."""
         return {
             "encoder": self.encoder.state_dict(),
             "decoder": self.decoder.state_dict(),
@@ -231,7 +223,6 @@ class OsuReplayVAE(OsuModel):
         }
 
     def _load_state_dict(self, checkpoint):
-        """Load state dictionary for VAE model."""
         self.encoder.load_state_dict(checkpoint["encoder"])
         self.decoder.load_state_dict(checkpoint["decoder"])
 
@@ -263,12 +254,12 @@ class OsuReplayVAE(OsuModel):
         with torch.no_grad():
             beatmap_tensor = torch.FloatTensor(beatmap_data).to(self.device)
 
-            # Create windowed features for generation
+            # create windowed features for generation
             windowed_features = self.create_windowed_features(beatmap_tensor)
 
             batch_size = beatmap_tensor.shape[0]
 
-            # Sample from prior distribution
+            # sample from prior distribution
             z = torch.randn(batch_size, self.latent_dim, device=self.device)
 
             pos = self.decoder(windowed_features, z)

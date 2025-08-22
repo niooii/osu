@@ -10,27 +10,22 @@ from .base import OsuModel
 
 class OsuKeyModel(OsuModel):
     def __init__(self, batch_size=64, device=None, noise_std=0.0):
-        # Store KeyModel-specific parameters before calling super().__init__
         self.noise_std = noise_std
         
-        # Call parent constructor which will call our abstract methods
         super().__init__(batch_size=batch_size, device=device, noise_std=noise_std)
     
     def _initialize_models(self, **kwargs):
-        """Initialize key prediction model."""
         self.key_model = KeyModel(self.input_size, self.noise_std)
     
     def _initialize_optimizers(self):
-        """Initialize key model optimizer."""
         self.key_optimizer = optim.AdamW(self.key_model.parameters(), lr=0.01, weight_decay=0.001)
         self.key_criterion = nn.BCEWithLogitsLoss()
-    
+   
+    # overload for keypress features
     def _extract_target_data(self, output_data):
-        """Extract key data (k1, k2) from output data for key training."""
-        return output_data[:, :, 2:]  # Take last 2 features (k1, k2)
+        return output_data[:, :, 2:]  # take last 2 features (k1, k2)
     
     def _train_epoch(self, epoch, total_epochs, **kwargs):
-        """Train KeyModel for one epoch with training and validation phases."""
         # Training phase
         self.key_model.train()
         epoch_train_loss = 0
@@ -39,10 +34,8 @@ class OsuKeyModel(OsuModel):
             batch_x = batch_x.to(self.device)
             batch_y = batch_y.to(self.device)
 
-            # Process keys to normalize dominant key
             self._process_keys(batch_y)
 
-            # Train key model
             self.key_optimizer.zero_grad()
             keys = self.key_model(batch_x)
             keys_loss = self.key_criterion(keys, batch_y)
@@ -75,8 +68,9 @@ class OsuKeyModel(OsuModel):
             'test_loss': avg_test_loss
         }
 
+    # we find the dominant key and then swap it to the first position
+    # not really needed if training off of one person's data though
     def _process_keys(self, keys_tensor: torch.FloatTensor):
-        """Process keys to normalize dominant key to first position"""
         prev_states = torch.cat([
             torch.zeros(keys_tensor.shape[0], 1, 2, device=keys_tensor.device),
             keys_tensor[:, :-1, :]
@@ -92,17 +86,14 @@ class OsuKeyModel(OsuModel):
         keys_tensor[swap_mask] = torch.flip(keys_tensor[swap_mask], dims=[2])
 
     def _get_state_dict(self):
-        """Get state dictionary for saving KeyModel."""
         return {
             'key_model': self.key_model.state_dict()
         }
     
     def _load_state_dict(self, checkpoint):
-        """Load state dictionary for KeyModel."""
         self.key_model.load_state_dict(checkpoint['key_model'])
 
     def generate(self, beatmap_data):
-        """Generate key predictions - returns boolean array"""
         self._set_eval_mode()
         with torch.no_grad():
             beatmap_tensor = torch.FloatTensor(beatmap_data).to(self.device)
