@@ -113,9 +113,6 @@ class OsuReplayAVAE(OsuReplayVAE):
         # scores a play on realness
         self.critic = ReplayCritic(
             window_feat_dim=window_feat_dim,
-            proj_dim=64,
-            lstm_hidden=256,
-            n_layers=2
         )
 
     def _initialize_optimizers(self):
