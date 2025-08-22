@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 import tqdm
-
+from torch.nn.attention import sdpa_kernel, SDPBackend
 from models.vae.vae import OsuReplayVAE
 from models.vae.decoder import ReplayDecoder
 import osu.dataset as dataset
@@ -165,9 +165,10 @@ class OsuReplayAVAE(OsuReplayVAE):
         # interpolation in position space
         # (B, T, 2)
         x = (alpha * real_pos + (1.0 - alpha) * fake_pos).requires_grad_(True)
-
+        
         # (B,)
-        C_x = self.critic(windowed, x)
+        with sdpa_kernel(backends=[SDPBackend.MATH]):
+            C_x = self.critic(windowed, x)
 
         # compute gradients of outputs wrt interpolated positions
         # (this works since the gradient distributes)
