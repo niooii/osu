@@ -1,16 +1,10 @@
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# Global VAE configuration
-FUTURE_FRAMES = 70
-PAST_FRAMES = 20
-
-
-class ReplayDecoder(nn.Module):
-    """Decode latent code + beatmap features to cursor positions"""
-
-    def __init__(self, input_size, latent_dim=32, past_frames=PAST_FRAMES, future_frames=FUTURE_FRAMES):
+class ReplayDecoderT(nn.Module):
+    def __init__(self, input_size, latent_dim=32):
         super().__init__()
         self.past_frames = past_frames
         self.future_frames = future_frames

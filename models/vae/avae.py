@@ -206,6 +206,7 @@ class OsuReplayAVAE(OsuReplayVAE):
                 
             epoch_C_loss += critic_loss_accum / max(1, self.critic_steps)
             epoch_G_loss += gen_loss.item()
+            epoch_recon_loss += pos_loss.item()
 
         # anneal KL at epoch end
         # not training the VAE though, maybe itll help idk
@@ -213,7 +214,6 @@ class OsuReplayAVAE(OsuReplayVAE):
 
         nb = len(self.train_loader)
         return {
-            'total': epoch_total_loss / nb,
             'recon': epoch_recon_loss / nb,
             # 'kl': epoch_kl_loss / nb,
             'gen': epoch_G_loss / nb,

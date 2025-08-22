@@ -1,7 +1,8 @@
 # Notes
 Notes for stuff related to this project, mostly for myself
 
-- Use *sliding window* attention instead of full bidirectional attention and/or windowed feature input. Seems a lot better for local attended features, which is the goal?
+- Use *sliding window* attention instead of full bidirectional attention and/or windowed feature input. Seems a lot better for local attended features, which is the goal? 
+Seems like our net just needs to attend to a small local window of features, shouldn't waste memory and stuff
 
 # god tier papers
 - Sliding window attention: https://arxiv.org/abs/2502.18845
