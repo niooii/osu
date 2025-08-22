@@ -126,7 +126,7 @@ class OsuReplayAVAE(OsuReplayVAE):
     def _train_epoch(self, epoch, total_epochs, **kwargs):
         epoch_total_loss = 0.0
         epoch_recon_loss = 0.0
-        epoch_kl_loss = 0.0
+        epoch_adv_loss = 0.0
         epoch_G_loss = 0.0
         epoch_C_loss = 0.0
 
@@ -195,9 +195,9 @@ class OsuReplayAVAE(OsuReplayVAE):
 
             # TODO! add consistency loss prob
             adv_loss = -self.critic(windowed, fake).mean()
-            pos_loss = F.smooth_l1_loss(fake, batch_y_pos, reduction='mean')
+            pos_loss = self.lambda_pos * F.smooth_l1_loss(fake, batch_y_pos, reduction='mean')
 
-            gen_loss = adv_loss + self.lambda_pos * pos_loss
+            gen_loss = adv_loss + pos_loss
             
             self.opt_G.zero_grad(); 
             gen_loss.backward(); 
@@ -207,6 +207,7 @@ class OsuReplayAVAE(OsuReplayVAE):
             epoch_C_loss += critic_loss_accum / max(1, self.critic_steps)
             epoch_G_loss += gen_loss.item()
             epoch_recon_loss += pos_loss.item()
+            epoch_adv_loss += adv_loss.item()
 
         # anneal KL at epoch end
         # not training the VAE though, maybe itll help idk
@@ -215,7 +216,7 @@ class OsuReplayAVAE(OsuReplayVAE):
         nb = len(self.train_loader)
         return {
             'recon': epoch_recon_loss / nb,
-            # 'kl': epoch_kl_loss / nb,
+            'adv': epoch_adv_loss / nb,
             'gen': epoch_G_loss / nb,
             'critic': epoch_C_loss / nb
         }
