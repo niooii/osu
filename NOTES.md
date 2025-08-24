@@ -1,8 +1,16 @@
 # Notes
 Notes for stuff related to this project, mostly for myself
 
+# VAE transformer ideas
 - Use *sliding window* attention instead of full bidirectional attention and/or windowed feature input. Seems a lot better for local attended features, which is the goal? 
 Seems like our net just needs to attend to a small local window of features, shouldn't waste memory and stuff
+
+# WGAN ideas
+- Also instead of just using SmoothL1Loss in the WGAN generator position loss, don't calculate the loss for frames where
+nothing's on the screen, or a spinner frame. 
+- I don't know how effective the VAE is in the WGAN training, try not using the VAE at all, just wgan gp training. 
+- The generator should also be a transformer, rebalance the constants after that.
+- The gradient penalty impl has to be changed to not use second order graidents, so the critic can use the FlashAttention kernel.
 
 # god tier papers
 - Sliding window attention: https://arxiv.org/abs/2502.18845

@@ -23,31 +23,3 @@ def generate_play(
     return np.concatenate([position_data, key_data], axis=-1)
 
 
-def generate_play_rnn(beatmap_data, rnn_model: OsuReplayRNN, key_model: OsuKeyModel) -> np.ndarray:
-    """
-    Convenience function for generating play data using RNN for positions.
-    
-    Args:
-        beatmap_data: Beatmap time series data
-        rnn_model: RNN model for generating cursor positions
-        key_model: KeyModel for generating key presses
-        
-    Returns:
-        np.ndarray: Complete replay data in [x, y, k1, k2] format
-    """
-    return generate_play(beatmap_data, rnn_model, key_model)
-
-
-def generate_play_gan(beatmap_data, gan_model: OsuReplayGAN, key_model: OsuKeyModel) -> np.ndarray:
-    """
-    Convenience function for generating play data using GAN for positions.
-    
-    Args:
-        beatmap_data: Beatmap time series data
-        gan_model: GAN model for generating cursor positions
-        key_model: KeyModel for generating key presses
-        
-    Returns:
-        np.ndarray: Complete replay data in [x, y, k1, k2] format
-    """
-    return generate_play(beatmap_data, gan_model, key_model)
