@@ -75,6 +75,12 @@ class ReplayTransformer(OsuModel):
         self.key_head = nn.Linear(self.embed_dim, 2)
 
     def _initialize_optimizers(self):
+        optimizer = torch.optim.AdamW(
+            self.parameters(),
+            lr=1e-4,
+            weight_decay=0.01,
+            betas=(0.9, 0.98)  # Transformer-specific betas
+        )
         pass
 
     # maps beatmap features to their respective embeddings
@@ -114,12 +120,13 @@ class ReplayTransformer(OsuModel):
         # [frame 2 ... frame 2048]
         tgt = output[:, 1:]
 
+        T_dec = dec_in.shape[1]
+
         # (B, T, embed_dim)
         play_embeddings = self.proj_output_layer(dec_in)
 
-        # TODO! need rectnagular mask not square
         tgt_mask = self.local_mask(T=BATCH_LENGTH, past_frames=BATCH_LENGTH, future_frames=0)
-        mem_mask = self.local_mask(T=BATCH_LENGTH, past_frames=90, future_frames=0)
+        mem_mask = self.cross_attn_mask(T_dec=T_dec, T_enc=BATCH_LENGTH, past_frames=120)
 
         # (B, T, embed_dim)
         dec_out = self.decoder(tgt=play_embeddings, tgt_mask=tgt_mask, memory=map_embeddings, memory_mask=mem_mask)
@@ -133,14 +140,61 @@ class ReplayTransformer(OsuModel):
         return pos_dist, keys, tgt
 
     def _train_epoch(self, epoch: int, total_epochs: int) -> dict:
-        pass
+        epoch_pos_loss = 0
+        epoch_keys_loss = 0
+        
+        num_batches = len(self.train_loader)
+
+        for i, (batch_x, batch_y) in enumerate(self.train_loader):
+            self._set_custom_train_status(f"Batch {i}/{num_batches}")
+            pos_dist, keys, tgt = self.forward(beatmap_features=batch_x, output=batch_y)
+            
+            # (B, T, 2)
+            # the mean predictions (basically position pred)
+            mu_xy = pos_dist[:, :, :2]
+
+            # (B, T, 2)
+            # the variance predictions
+            sig_xy = pos_dist[:, :, 2:]
+
+            pos_loss = F.gaussian_nll_loss(input=mu_xy, target=tgt[:, :, :2], var=sig_xy, full=True, reduction="mean")
+            key_loss = F.binary_cross_entropy_with_logits(input=keys, target=batch_y[:, :, 2:], reduction="mean")
+
+            total_loss = pos_loss + key_loss
+            total_loss.backward()
+
+            epoch_pos_loss += pos_loss.item()
+            epoch_keys_loss += key_loss.item()
+            
+        return {
+            "pos_loss": epoch_pos_loss / num_batches,
+            "key_loss": epoch_keys_loss / num_batches
+        }
+
 
     # attention mask since full global bidirectional attention isn't necessary
     def local_mask(self, T: int, past_frames: int, future_frames: int, device=None):
         device = device or torch.device('cuda')
-        i = torch.arange(T, device=device).unsqueeze(1)     # (T,1)
-        j = torch.arange(T, device=device).unsqueeze(0)     # (1,T)
-        allow = (j >= (i - past_frames)) & (j <= (i + future_frames))  # (T,T) bools
+        i = torch.arange(T, device=device).unsqueeze(1)     # (T, 1)
+        j = torch.arange(T, device=device).unsqueeze(0)     # (1, T)
+        allow = (j >= (i - past_frames)) & (j <= (i + future_frames))  # (T, T) bools
         mask = torch.full((T, T), float('-inf'), device=device)
         mask[allow] = 0.0
         return mask  # additive mask to be passed as src_mask
+
+    def cross_attn_mask(self, T_dec: int, T_enc: int, past_frames=120, device=None):
+        """New function for rectangular cross-attention masks"""
+        device = device or torch.device('cuda')
+        
+        i = torch.arange(T_dec, device=device).unsqueeze(1)  # (T_dec, 1)
+        j = torch.arange(T_enc, device=device).unsqueeze(0)  # (1, T_enc)
+        
+        # map decoder positions to encoder positions
+        enc_positions = (i * T_enc / T_dec).long()
+        
+        # allow attending to [enc_pos - lookback, enc_pos]
+        allow = (j >= (enc_positions - past_frames)) & (j <= enc_positions)
+        
+        mask = torch.full((T_dec, T_enc), float('-inf'), device=device)
+        mask[allow] = 0.0
+        return mask
