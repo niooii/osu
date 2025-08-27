@@ -57,6 +57,8 @@ class ReplayTransformer(OsuModel):
         self.encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=self.transformer_layers)
 
         # decoder step
+        self.proj_output_layer = nn.Linear(4, self.embed_dim)
+
         self.decoder_layer = nn.TransformerDecoderLayer(
             d_model=self.embed_dim, 
             nhead=self.attn_heads,
@@ -99,16 +101,41 @@ class ReplayTransformer(OsuModel):
         return output_data
 
 
-    def forward(self, beatmap_features, positions):
+    # output is (B, T, [x, y, k1, k2])
+    def forward(self, beatmap_features, output):
         # x = torch.cat([beatmap_features, positions], dim=-1)
         
-        embeddings = self.map_embeddings(beatmap_features=beatmap_features)    # (B, T, embed_dim)
+        # (B, T, embed_dim)
+        map_embeddings = self.map_embeddings(beatmap_features=beatmap_features)    # (B, T, embed_dim)
+        
+        # (B, T - 1, 4)
+        # [frame 1 ... frame 2047]
+        dec_in = output[:, :-1]
+        # [frame 2 ... frame 2048]
+        tgt = output[:, 1:]
 
-        self.decoder(memory=)
+        # (B, T, embed_dim)
+        play_embeddings = self.proj_output_layer(dec_in)
 
-        # return mu, logvar
+        # TODO! need rectnagular mask not square
+        tgt_mask = self.local_mask(T=BATCH_LENGTH, past_frames=BATCH_LENGTH, future_frames=0)
+        mem_mask = self.local_mask(T=BATCH_LENGTH, past_frames=90, future_frames=0)
 
-    # attention mask for the encoder, since global bidirectional attention isn't necessary
+        # (B, T, embed_dim)
+        dec_out = self.decoder(tgt=play_embeddings, tgt_mask=tgt_mask, memory=map_embeddings, memory_mask=mem_mask)
+        
+        # (B, T, 4)
+        pos_dist = self.pos_head(dec_out)
+        # (B, T, 2)
+        keys = self.key_head(dec_out)
+
+        # return tgt for computing loss
+        return pos_dist, keys, tgt
+
+    def _train_epoch(self, epoch: int, total_epochs: int) -> dict:
+        pass
+
+    # attention mask since full global bidirectional attention isn't necessary
     def local_mask(self, T: int, past_frames: int, future_frames: int, device=None):
         device = device or torch.device('cuda')
         i = torch.arange(T, device=device).unsqueeze(1)     # (T,1)
