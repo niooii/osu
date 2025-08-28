@@ -114,7 +114,6 @@ class ReplayTransformer(nn.Module):
         # (B, T, embed_dim)
         play_embeddings = self.proj_output_layer(dec_in)
 
-        # TODO! Fixed mask dimension mismatch - tgt_mask should match decoder input length T_dec (2047), not BATCH_LENGTH (2048)
         tgt_mask = self.local_mask(T=T_dec, past_frames=T_dec, future_frames=0)
         mem_mask = self.cross_attn_mask(T_dec=T_dec, T_enc=BATCH_LENGTH, past_frames=120)
 
@@ -228,9 +227,11 @@ class OsuReplayTransformer(OsuModel):
 
             # (B, T, 2)
             # the variance predictions
-            sig_xy = pos_dist[:, :, 2:]
+            logvar_xy = pos_dist[:, :, 2:]
+            var_xy = torch.exp(logvar_xy)
+            var_xy = torch.clamp(var_xy, min=1e-6)
 
-            pos_loss = F.gaussian_nll_loss(input=mu_xy, target=tgt[:, :, :2], var=sig_xy, full=True, reduction="mean")
+            pos_loss = F.gaussian_nll_loss(input=mu_xy, target=tgt[:, :, :2], var=var_xy, full=True, reduction="mean")
             key_loss = F.binary_cross_entropy_with_logits(input=keys, target=batch_y[:, :, 2:], reduction="mean")
 
             total_loss = pos_loss + key_loss
