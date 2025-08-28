@@ -114,7 +114,8 @@ class ReplayTransformer(nn.Module):
         # (B, T, embed_dim)
         play_embeddings = self.proj_output_layer(dec_in)
 
-        tgt_mask = self.local_mask(T=BATCH_LENGTH, past_frames=BATCH_LENGTH, future_frames=0)
+        # TODO! Fixed mask dimension mismatch - tgt_mask should match decoder input length T_dec (2047), not BATCH_LENGTH (2048)
+        tgt_mask = self.local_mask(T=T_dec, past_frames=T_dec, future_frames=0)
         mem_mask = self.cross_attn_mask(T_dec=T_dec, T_enc=BATCH_LENGTH, past_frames=120)
 
         # (B, T, embed_dim)
