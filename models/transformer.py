@@ -281,8 +281,9 @@ class OsuReplayTransformer(OsuModel):
         print(f"{cls.__name__} loaded from {path}")
         return instance
 
-    def generate(self, beatmap_data, temperature=1.0):
-        pass
+    def generate(self, beatmap_data, _, _a):
+        return []
+    # def generate(self, beatmap_data, temperature=1.0):
     #     self._set_eval_mode()
     #     
     #     with torch.no_grad():
