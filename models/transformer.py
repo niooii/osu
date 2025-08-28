@@ -232,7 +232,7 @@ class OsuReplayTransformer(OsuModel):
             var_xy = torch.clamp(var_xy, min=1e-6)
 
             pos_loss = F.gaussian_nll_loss(input=mu_xy, target=tgt[:, :, :2], var=var_xy, full=True, reduction="mean")
-            key_loss = F.binary_cross_entropy_with_logits(input=keys, target=batch_y[:, :, 2:], reduction="mean")
+            key_loss = F.binary_cross_entropy_with_logits(input=keys, target=tgt[:, :, 2:], reduction="mean")
 
             total_loss = pos_loss + key_loss
             total_loss.backward()
