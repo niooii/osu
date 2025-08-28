@@ -130,7 +130,6 @@ class ReplayTransformer(nn.Module):
 
     # attention mask since full global bidirectional attention isn't necessary
     def local_mask(self, T: int, past_frames: int, future_frames: int, device=None):
-        # TODO! Fixed device handling to be more flexible like other models
         device = device or next(self.parameters()).device
         i = torch.arange(T, device=device).unsqueeze(1)     # (T, 1)
         j = torch.arange(T, device=device).unsqueeze(0)     # (1, T)
@@ -140,8 +139,6 @@ class ReplayTransformer(nn.Module):
         return mask  # additive mask to be passed as src_mask
 
     def cross_attn_mask(self, T_dec: int, T_enc: int, past_frames=120, device=None):
-        """New function for rectangular cross-attention masks"""
-        # TODO! Fixed device handling to be more flexible like other models
         device = device or next(self.parameters()).device
         
         i = torch.arange(T_dec, device=device).unsqueeze(1)  # (T_dec, 1)
