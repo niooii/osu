@@ -9,8 +9,6 @@ FUTURE_FRAMES = 70
 PAST_FRAMES = 20
 
 
-# A transformer variant of the old RNN encoder
-# TODO store hyperparam dict
 class ReplayTransformer(nn.Module):
     def __init__(
         self, 
@@ -96,6 +94,10 @@ class ReplayTransformer(nn.Module):
 
     # output is (B, T, [x, y, k1, k2])
     def forward(self, beatmap_features, output):
+        device = next(self.parameters()).device
+        beatmap_features = beatmap_features.to(device)
+        output = output.to(device)
+        
         # x = torch.cat([beatmap_features, positions], dim=-1)
         
         # (B, T, embed_dim)
@@ -212,6 +214,9 @@ class OsuReplayTransformer(OsuModel):
 
         for i, (batch_x, batch_y) in enumerate(self.train_loader):
             self._set_custom_train_status(f"Batch {i}/{num_batches}")
+            
+            batch_x = batch_x.to(self.device)
+            batch_y = batch_y.to(self.device)
             
             self.optimizer.zero_grad()
             pos_dist, keys, tgt = self.forward(beatmap_features=batch_x, output=batch_y)
