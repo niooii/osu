@@ -302,7 +302,9 @@ class OsuReplayTransformer(OsuModel):
             for t in range(1, seq_len):
                 print(f"pred {t}")
                 # this is really bad and also not continuous between chunks..,
-                pos_dist, keys, _ = self.transformer(map_tensor, generated)
+                # pos_dist, keys = self.transformer(map_tensor, generated)
+
+                pos_dist, tgt = self.transformer(map_tensor, generated)
 
                 mu_xy = pos_dist[:, t-1, :2]
                 logvar = pos_dist[:, t - 1, 2:]  # (B,2)
@@ -310,11 +312,11 @@ class OsuReplayTransformer(OsuModel):
                 sigma = sigma * float(temperature)
                 pos_sample = torch.normal(mu_xy, sigma)
 
-                key_probs = torch.sigmoid(keys[:, t-1, :] / temperature)
-                key_sample = torch.bernoulli(key_probs)
+                # key_probs = torch.sigmoid(keys[:, t-1, :] / temperature)
+                # key_sample = torch.bernoulli(key_probs)
 
                 generated[:, t, :2] = pos_sample
-                generated[:, t, 2:] = key_sample
+                # generated[:, t, 2:] = key_sample
 
         self._set_train_mode()
         return generated.cpu().numpy()
