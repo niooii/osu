@@ -123,10 +123,10 @@ class ReplayTransformer(nn.Module):
         # (B, T, 4)
         pos_dist = self.pos_head(dec_out)
         # (B, T, 2)
-        keys = self.key_head(dec_out)
+        # keys = self.key_head(dec_out)
 
         # return tgt for computing loss
-        return pos_dist, keys, tgt
+        return pos_dist, tgt, #keys
 
 
     # attention mask since full global bidirectional attention isn't necessary
@@ -208,7 +208,7 @@ class OsuReplayTransformer(OsuModel):
 
     def _train_epoch(self, epoch: int, total_epochs: int) -> dict:
         epoch_pos_loss = 0
-        epoch_keys_loss = 0
+        # epoch_keys_loss = 0
         
         num_batches = len(self.train_loader)
 
@@ -219,7 +219,8 @@ class OsuReplayTransformer(OsuModel):
             batch_y = batch_y.to(self.device)
             
             self.optimizer.zero_grad()
-            pos_dist, keys, tgt = self.forward(beatmap_features=batch_x, output=batch_y)
+            # pos_dist, tgt, keys = self.forward(beatmap_features=batch_x, output=batch_y)
+            pos_dist, tgt = self.forward(beatmap_features=batch_x, output=batch_y)
             
             # (B, T, 2)
             # the mean predictions (basically position pred)
@@ -232,20 +233,20 @@ class OsuReplayTransformer(OsuModel):
             var_xy = torch.clamp(var_xy, min=1e-6)
 
             pos_loss = F.gaussian_nll_loss(input=mu_xy, target=tgt[:, :, :2], var=var_xy, full=True, reduction="mean")
-            key_loss = F.binary_cross_entropy_with_logits(input=keys, target=tgt[:, :, 2:], reduction="mean")
+            # key_loss = F.binary_cross_entropy_with_logits(input=keys, target=tgt[:, :, 2:], reduction="mean")
 
-            total_loss = pos_loss + key_loss
+            total_loss = pos_loss # + key_loss
             total_loss.backward()
 
             torch.nn.utils.clip_grad_norm_(self.transformer.parameters(), max_norm=1.0)
             self.optimizer.step()
 
             epoch_pos_loss += pos_loss.item()
-            epoch_keys_loss += key_loss.item()
+            # epoch_keys_loss += key_loss.item()
             
         return {
             "pos_loss": epoch_pos_loss / num_batches,
-            "key_loss": epoch_keys_loss / num_batches
+            # "key_loss": epoch_keys_loss / num_batches
         }
 
     def _get_state_dict(self):
