@@ -164,6 +164,11 @@ class OsuReplayTVAE(OsuModel):
             "encoder": self.encoder.state_dict(),
             "decoder": self.decoder.state_dict(),
             "latent_dim": self.latent_dim,
+            "embed_dim": self.embed_dim,
+            "transformer_layers": self.transformer_layers,
+            "ff_dim": self.ff_dim,
+            "attn_heads": self.attn_heads,
+            "noise_std": self.noise_std,
             "input_size": self.input_size,
             "past_frames": self.past_frames,
             "future_frames": self.future_frames,
@@ -177,13 +182,16 @@ class OsuReplayTVAE(OsuModel):
     def load(cls, path: str, device: Optional[torch.device] = None, **kwargs):
         device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        # Load state dict
         checkpoint = torch.load(path, map_location=device)
-
-        # load hyperparams (should make this automatic sometime)
+        
         vae_args = {
-            "frame_window": (checkpoint["past_frames"], checkpoint["future_frames"]),
-            "latent_dim": checkpoint["latent_dim"],
+            "latent_dim": checkpoint.get("latent_dim", 64),
+            "embed_dim": checkpoint.get("embed_dim", 128),
+            "transformer_layers": checkpoint.get("transformer_layers", 6),
+            "ff_dim": checkpoint.get("ff_dim", 1024),
+            "attn_heads": checkpoint.get("attn_heads", 8),
+            "noise_std": checkpoint.get("noise_std", 0.0),
+            "frame_window": (checkpoint.get("past_frames", 40), checkpoint.get("future_frames", 90)),
         }
 
         instance = cls(device=device, **kwargs, **vae_args)

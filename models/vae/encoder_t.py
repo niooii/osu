@@ -5,9 +5,6 @@ import torch.nn.functional as F
 
 from osu.dataset import BATCH_LENGTH
 
-FUTURE_FRAMES = 70
-PAST_FRAMES = 20
-
 # TODO unused for now, see transformer.py
 # TODO store hyperparam dict
 class ReplayEncoderT(nn.Module):
