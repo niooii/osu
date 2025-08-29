@@ -5,6 +5,7 @@ assets
 .env
 .checkpoints
 .datasets
+*.pt
 all_scores.csv
 .venv*
 *.ipynb
