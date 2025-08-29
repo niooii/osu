@@ -1,8 +1,8 @@
 
 import torch
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
 from osu.dataset import BATCH_LENGTH
 
 FUTURE_FRAMES = 70
@@ -14,18 +14,18 @@ class ReplayEncoderT(nn.Module):
     def __init__(
         self, 
         input_size, 
-        embed_dim=128,
-        transformer_layers=4,
-        ff_dim=1024,
-        attn_heads=8,
-        noise_std=0.0, 
-        past_frames=PAST_FRAMES, 
-        future_frames=FUTURE_FRAMES
+        latent_dim: int,
+        embed_dim: int,
+        transformer_layers: int,
+        ff_dim: int,
+        attn_heads: int,
+        noise_std: float, 
+        past_frames: int, 
+        future_frames: int
     ):
         super().__init__()
         self.past_frames = past_frames
         self.future_frames = future_frames
-        self.window_size = past_frames + 1 + future_frames  # +1 for current frame
         self.noise_std = noise_std
         
         # project input features (9 or so -> embedding dim)
@@ -38,6 +38,19 @@ class ReplayEncoderT(nn.Module):
         self.encoder_layer = nn.TransformerEncoderLayer(d_model=embed_dim, nhead=attn_heads, dim_feedforward=ff_dim, batch_first=True)
 
         self.encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=transformer_layers)
+
+        self.mu_layer = nn.Sequential(
+            nn.Linear(in_features=embed_dim, out_features=latent_dim * 2),
+            nn.ReLU(),
+            nn.Linear(in_features=latent_dim * 2, out_features=latent_dim),
+        )
+
+        self.logvar_layer = nn.Sequential(
+            nn.Linear(in_features=embed_dim, out_features=latent_dim * 2),
+            nn.ReLU(),
+            nn.Linear(in_features=latent_dim * 2, out_features=latent_dim),
+        )
+
 
     # maps beatmap features to their respective embeddings
     # (B, T, feature_dim) -> (B, T, embed_dim)
@@ -72,10 +85,10 @@ class ReplayEncoderT(nn.Module):
         # pool and compute mu and logvar for the latent code
         p_embed = embeddings.mean(dim=1) # (B, embed_dim)
 
-        # mu = self.mu_layer(p_embed)
-        # logvar = self.logvar_layer(p_embed)
+        mu = self.mu_layer(p_embed)
+        logvar = self.logvar_layer(p_embed)
 
-        # return mu, logvar
+        return embeddings, mu, logvar
 
     # attention mask for the encoder, since global bidirectional attention isn't necessary
     def local_mask(self, T: int, past_frames: int, future_frames: int, device=None):

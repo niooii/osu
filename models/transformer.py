@@ -1,13 +1,15 @@
+from typing import Optional
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from osu.dataset import BATCH_LENGTH
+
 from models.base import OsuModel
-from typing import Optional
+from osu.dataset import BATCH_LENGTH
 
 FUTURE_FRAMES = 70
 PAST_FRAMES = 20
-
+ 
 
 class ReplayTransformer(nn.Module):
     def __init__(
