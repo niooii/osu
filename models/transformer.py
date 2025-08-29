@@ -288,35 +288,32 @@ class OsuReplayTransformer(OsuModel):
         print(f"{cls.__name__} loaded from {path}")
         return instance
 
-    def generate(self, beatmap_data, _, _a):
-        return []
-    # def generate(self, beatmap_data, temperature=1.0):
-    #     self._set_eval_mode()
-    #     
-    #     with torch.no_grad():
-    #         map_tensor = torch.FloatTensor(beatmap_data).to(self.device)
-    #         batch_size, seq_len = map_tensor.shape[:2]
-    #         
-    #         # Initialize with zeros for autoregressive generation
-    #         generated = torch.zeros(batch_size, seq_len, 4, device=self.device)
-    #         
-    #         # Generate sequence autoregressively
-    #         for t in range(1, seq_len):
-    #             # Use previous predictions as input
-    #             pos_dist, keys, _ = self.transformer(map_tensor, generated)
-    #             
-    #             # Sample from position distribution
-    #             mu_xy = pos_dist[:, t-1, :2]
-    #             sig_xy = torch.exp(pos_dist[:, t-1, 2:]) * temperature
-    #             pos_sample = torch.normal(mu_xy, sig_xy)
-    #             
-    #             # Sample keypresses
-    #             key_probs = torch.sigmoid(keys[:, t-1, :] / temperature)
-    #             key_sample = torch.bernoulli(key_probs)
-    #             
-    #             # Store generated values
-    #             generated[:, t, :2] = pos_sample
-    #             generated[:, t, 2:] = key_sample
-    #     
-    #     self._set_train_mode()
-    #     return generated.cpu().numpy()
+    # how to make autoregressive and not take years
+    def generate(self, beatmap_data, temperature=0.0):
+        self._set_eval_mode()
+
+        with torch.no_grad():
+            map_tensor = torch.FloatTensor(beatmap_data).to(self.device)
+            batch_size, seq_len = map_tensor.shape[:2]
+
+            generated = torch.zeros(batch_size, seq_len, 4, device=self.device)
+
+            for t in range(1, seq_len):
+                print(f"pred {t}")
+                # this is really bad and also not continuous between chunks..,
+                pos_dist, keys, _ = self.transformer(map_tensor, generated)
+
+                mu_xy = pos_dist[:, t-1, :2]
+                logvar = pos_dist[:, t - 1, 2:]  # (B,2)
+                sigma = torch.exp(0.5 * logvar).clamp(min=1e-6)  # std
+                sigma = sigma * float(temperature)
+                pos_sample = torch.normal(mu_xy, sigma)
+
+                key_probs = torch.sigmoid(keys[:, t-1, :] / temperature)
+                key_sample = torch.bernoulli(key_probs)
+
+                generated[:, t, :2] = pos_sample
+                generated[:, t, 2:] = key_sample
+
+        self._set_train_mode()
+        return generated.cpu().numpy()
