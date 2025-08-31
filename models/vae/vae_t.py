@@ -132,7 +132,7 @@ class OsuReplayTVAE(OsuModel):
         # Sample latent code
         z = self.reparameterize(mu, logvar)
 
-        reconstructed = self.decoder(beatmap_features, z)
+        reconstructed = self.decoder(embeddings, z)
 
         return reconstructed, mu, logvar
 
