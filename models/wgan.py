@@ -11,6 +11,7 @@ from torch.nn.attention import SDPBackend, sdpa_kernel
 
 import osu.dataset as dataset
 from models.base import OsuModel
+from models.model_utils import TransformerArgs
 from models.standard_encoder_t import MapEncoder
 from models.vae.decoder_t import ReplayDecoderT
 from models.vae.vae import OsuReplayVAE
@@ -20,20 +21,14 @@ from models.vae.vae import OsuReplayVAE
 class ReplayGenerator(ReplayDecoderT):
     def __init__(
         self,
-        embed_dim: int,
-        transformer_layers: int,
-        ff_dim: int,
-        attn_heads: int,
+        transformer_args: TransformerArgs,
         past_frames: int,
         future_frames: int,
         noise_dim=32,
     ):
         super().__init__(
             latent_dim=noise_dim,
-            embed_dim=embed_dim,
-            transformer_layers=transformer_layers,
-            ff_dim=ff_dim,
-            attn_heads=attn_heads,
+            transformer_args=transformer_args,
             past_frames=past_frames,
             future_frames=future_frames,
         )
@@ -47,21 +42,28 @@ class ReplayGenerator(ReplayDecoderT):
 class OsuReplayWGAN(OsuModel):
     def __init__(
         self,
+        generator_args: TransformerArgs = None,
+        mapencoder_args: TransformerArgs = None,
+        critic_args: TransformerArgs = None,
         batch_size=64,
         device=None,
         frame_window=(20, 70),
-        noise_std=0.0,
         noise_dim=64,
         critic_steps=3,
-        lambda_gp=10.0,  # weight for gradient penalty
-        lambda_cons=1.0,  # weight for G-C consistency loss
-        lambda_pos=1.0,  # weight for position loss via mse
+        lambda_gp=10.0,
+        lambda_cons=1.0,
+        lambda_pos=1.0,
         lr_vae=1e-4,
         lr_g=1e-4,
         lr_c=1e-4,
         betas_vae=(0.9, 0.999),
         betas_gan=(0.5, 0.9),
     ):
+        self.generator_args = generator_args or TransformerArgs()
+        self.mapencoder_args = mapencoder_args or TransformerArgs()
+        self.critic_args = critic_args or TransformerArgs()
+        self.past_frames = frame_window[0]
+        self.future_frames = frame_window[1]
         self.noise_dim = noise_dim
         self.critic_steps = critic_steps
         self.lambda_gp = lambda_gp
@@ -77,7 +79,6 @@ class OsuReplayWGAN(OsuModel):
             batch_size=batch_size,
             device=device,
             frame_window=frame_window,
-            noise_std=noise_std,
             compile=False,
         )
 
@@ -86,12 +87,15 @@ class OsuReplayWGAN(OsuModel):
         super()._initialize_models(**kwargs)
 
         self.encoder = MapEncoder(
-            input_size=len(dataset.INPUT_FEATURES)
-            # TODO NO HARDCODE!!
+            input_size=len(dataset.INPUT_FEATURES),
+            transformer_args=self.mapencoder_args,
+            past_frames=self.past_frames,
+            future_frames=self.future_frames
         )
 
         # generator
         self.generator = ReplayGenerator(
+            transformer_args=self.generator_args,
             noise_dim=self.noise_dim,
             past_frames=self.past_frames,
             future_frames=self.future_frames,
@@ -104,6 +108,7 @@ class OsuReplayWGAN(OsuModel):
         # scores a play on realness
         self.critic = ReplayCritic(
             window_feat_dim=window_feat_dim,
+            transformer_args=self.critic_args,
         )
 
     def _initialize_optimizers(self):

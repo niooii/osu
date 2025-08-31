@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from ..model_utils import TransformerArgs
+
 
 # A transformer variant of the old RNN decoder,
 # It should be noted that the encoder already has a frame window when generating the map
@@ -12,14 +14,13 @@ class ReplayDecoderT(nn.Module):
     def __init__(
         self,
         latent_dim: int,
-        embed_dim: int,
-        transformer_layers: int,
-        ff_dim: int,
-        attn_heads: int,
+        transformer_args: TransformerArgs,
         past_frames: int = 0,
         future_frames: int = 0,
     ):
-        input_size = embed_dim + latent_dim
+        super().__init__()
+        
+        input_size = transformer_args.embed_dim + latent_dim
         self.pos_head = nn.Sequential(
             nn.Linear(in_features=input_size, out_features=input_size // 2),
             nn.ReLU(),
@@ -27,14 +28,13 @@ class ReplayDecoderT(nn.Module):
         )
 
         self.decoder_layer = nn.TransformerDecoderLayer(
-            d_model=input_size, nhead=attn_heads, dim_feedforward=ff_dim
+            d_model=input_size, nhead=transformer_args.attn_heads, dim_feedforward=transformer_args.ff_dim
         )
 
         self.decoder = nn.TransformerDecoder(
-            decoder_layer=self.decoder_layer, num_layers=transformer_layers
+            decoder_layer=self.decoder_layer, num_layers=transformer_args.transformer_layers
         )
 
-        pass
 
     def forward(self, map_embeddings, latent_code):
         batch_size, seq_len, _ = map_embeddings.shape

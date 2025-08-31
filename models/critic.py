@@ -2,28 +2,32 @@ import torch
 import torch.nn as nn
 from torch.nn.attention import sdpa_kernel, SDPBackend
 
+from .model_utils import TransformerArgs
+
 
 # follows the WGAN-GP paper, but this needs to use attention instead of an RNN since CuDNN does not support 
 # second order gradients
 class ReplayCritic(nn.Module):
-    def __init__(self, window_feat_dim, d_model=256, nhead=4, num_layers=2, dim_feedforward=512, dropout=0.1):
+    def __init__(self, window_feat_dim, transformer_args: TransformerArgs = None, dropout=0.1):
         super().__init__()
-        self.input_proj = nn.Linear(window_feat_dim + 2, d_model)
+        transformer_args = transformer_args or TransformerArgs()
+        
+        self.input_proj = nn.Linear(window_feat_dim + 2, transformer_args.embed_dim)
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d_model,
-            nhead=nhead,
-            dim_feedforward=dim_feedforward,
+            d_model=transformer_args.embed_dim,
+            nhead=transformer_args.attn_heads,
+            dim_feedforward=transformer_args.ff_dim,
             dropout=dropout,
             activation='gelu',
-            batch_first=True  # makes input (B,T,D)
+            batch_first=True
         )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-        self.pool = nn.AdaptiveAvgPool1d(1)  # pool over time after transpose
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=transformer_args.transformer_layers)
+        self.pool = nn.AdaptiveAvgPool1d(1)
         self.mlp = nn.Sequential(
-            nn.Linear(d_model, d_model // 2),
-            nn.LayerNorm(d_model // 2),
+            nn.Linear(transformer_args.embed_dim, transformer_args.embed_dim // 2),
+            nn.LayerNorm(transformer_args.embed_dim // 2),
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Linear(d_model // 2, 1)
+            nn.Linear(transformer_args.embed_dim // 2, 1)
         )
 
     def forward(self, windowed, positions):

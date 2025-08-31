@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from models.base import OsuModel
+from models.model_utils import TransformerArgs
 from osu.dataset import BATCH_LENGTH
 
 FUTURE_FRAMES = 70
@@ -15,26 +16,19 @@ class ReplayTransformer(nn.Module):
     def __init__(
         self, 
         input_size, 
-        embed_dim=128,
-        transformer_layers=4,
-        ff_dim=1024,
-        attn_heads=8,
+        transformer_args: TransformerArgs = None,
         noise_std=0.0, 
         past_frames=PAST_FRAMES, 
         future_frames=FUTURE_FRAMES
     ):
         super().__init__()
         
+        self.transformer_args = transformer_args or TransformerArgs()
         self.past_frames = past_frames
         self.future_frames = future_frames
         self.window_size = past_frames + 1 + future_frames  # +1 for current frame
         self.noise_std = noise_std
-
         self.input_size = input_size
-        self.embed_dim = embed_dim
-        self.transformer_layers = transformer_layers
-        self.ff_dim = ff_dim
-        self.attn_heads = attn_heads
         
         self._initialize_layers()
 
@@ -42,38 +36,38 @@ class ReplayTransformer(nn.Module):
         # encoder step
 
         # project input features (9 or so -> embedding dim)
-        self.proj_layer = nn.Linear(self.input_size, self.embed_dim)
+        self.proj_layer = nn.Linear(self.input_size, self.transformer_args.embed_dim)
         # learned position encodings (TODO! switch to rotating?)
         # BATCH_LENGTH is chunk lenght eg probably 2048
-        self.pos_enc = nn.Parameter(torch.randn(BATCH_LENGTH, self.embed_dim))
+        self.pos_enc = nn.Parameter(torch.randn(BATCH_LENGTH, self.transformer_args.embed_dim))
 
         # consists of an attention layer followed by 2 linear layers: embed_dim -> ff_dim -> embed_dim
         self.encoder_layer = nn.TransformerEncoderLayer(
-            d_model=self.embed_dim, 
-            nhead=self.attn_heads, 
-            dim_feedforward=self.ff_dim, 
+            d_model=self.transformer_args.embed_dim, 
+            nhead=self.transformer_args.attn_heads, 
+            dim_feedforward=self.transformer_args.ff_dim, 
             batch_first=True
         )
 
-        self.encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=self.transformer_layers)
+        self.encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=self.transformer_args.transformer_layers)
 
         # decoder step
-        self.proj_output_layer = nn.Linear(4, self.embed_dim)
+        self.proj_output_layer = nn.Linear(4, self.transformer_args.embed_dim)
 
         self.decoder_layer = nn.TransformerDecoderLayer(
-            d_model=self.embed_dim, 
-            nhead=self.attn_heads,
-            dim_feedforward=self.ff_dim,
+            d_model=self.transformer_args.embed_dim, 
+            nhead=self.transformer_args.attn_heads,
+            dim_feedforward=self.transformer_args.ff_dim,
             batch_first=True
         )
 
-        self.decoder = nn.TransformerDecoder(decoder_layer=self.decoder_layer, num_layers=self.transformer_layers)
+        self.decoder = nn.TransformerDecoder(decoder_layer=self.decoder_layer, num_layers=self.transformer_args.transformer_layers)
 
         # unlike the other models, we learn [μx, μy, σx, σy] as
         # distribution parameters since we're no longer using latent codes
-        self.pos_head = nn.Linear(self.embed_dim, 4)
+        self.pos_head = nn.Linear(self.transformer_args.embed_dim, 4)
         # we also learn keypresses because transformer big attention good
-        self.key_head = nn.Linear(self.embed_dim, 2)
+        self.key_head = nn.Linear(self.transformer_args.embed_dim, 2)
 
     # maps beatmap features to their respective embeddings
     # (B, T, feature_dim) -> (B, T, embed_dim)
@@ -161,20 +155,14 @@ class ReplayTransformer(nn.Module):
 class OsuReplayTransformer(OsuModel):
     def __init__(
         self, 
-        embed_dim=128,
-        transformer_layers=4,
-        ff_dim=1024,
-        attn_heads=8,
+        transformer_args: TransformerArgs = None,
         noise_std=0.0, 
         past_frames=PAST_FRAMES, 
         future_frames=FUTURE_FRAMES,
         batch_size=64,
         device=None,
     ):
-        self.embed_dim = embed_dim
-        self.transformer_layers = transformer_layers
-        self.ff_dim = ff_dim
-        self.attn_heads = attn_heads
+        self.transformer_args = transformer_args or TransformerArgs()
         self.noise_std = noise_std
         self.past_frames = past_frames
         self.future_frames = future_frames
@@ -184,10 +172,7 @@ class OsuReplayTransformer(OsuModel):
     def _initialize_models(self, **kwargs):
         self.transformer = ReplayTransformer(
             input_size=self.input_size,
-            embed_dim=self.embed_dim,
-            transformer_layers=self.transformer_layers,
-            ff_dim=self.ff_dim,
-            attn_heads=self.attn_heads,
+            transformer_args=self.transformer_args,
             noise_std=self.noise_std,
             past_frames=self.past_frames,
             future_frames=self.future_frames
@@ -254,10 +239,10 @@ class OsuReplayTransformer(OsuModel):
     def _get_state_dict(self):
         return {
             'transformer': self.transformer.state_dict(),
-            'embed_dim': self.embed_dim,
-            'transformer_layers': self.transformer_layers,
-            'ff_dim': self.ff_dim,
-            'attn_heads': self.attn_heads,
+            'embed_dim': self.transformer_args.embed_dim,
+            'transformer_layers': self.transformer_args.transformer_layers,
+            'ff_dim': self.transformer_args.ff_dim,
+            'attn_heads': self.transformer_args.attn_heads,
             'noise_std': self.noise_std,
             'past_frames': self.past_frames,
             'future_frames': self.future_frames,
@@ -274,17 +259,21 @@ class OsuReplayTransformer(OsuModel):
         checkpoint = torch.load(path, map_location=device)
         
         # load hyperparameters from checkpoint
-        transformer_args = {
-            'embed_dim': checkpoint.get('embed_dim', 128),
-            'transformer_layers': checkpoint.get('transformer_layers', 4),
-            'ff_dim': checkpoint.get('ff_dim', 1024),
-            'attn_heads': checkpoint.get('attn_heads', 8),
+        transformer_args = TransformerArgs(
+            embed_dim=checkpoint.get('embed_dim', 128),
+            transformer_layers=checkpoint.get('transformer_layers', 4),
+            ff_dim=checkpoint.get('ff_dim', 1024),
+            attn_heads=checkpoint.get('attn_heads', 8)
+        )
+        
+        model_args = {
+            'transformer_args': transformer_args,
             'noise_std': checkpoint.get('noise_std', 0.0),
             'past_frames': checkpoint.get('past_frames', PAST_FRAMES),
             'future_frames': checkpoint.get('future_frames', FUTURE_FRAMES)
         }
         
-        instance = cls(device=device, **kwargs, **transformer_args)
+        instance = cls(device=device, **kwargs, **model_args)
         instance._load_state_dict(checkpoint)
         instance._set_eval_mode()
         

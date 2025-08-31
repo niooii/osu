@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from osu.dataset import BATCH_LENGTH
+from .model_utils import TransformerArgs
 
 
 # an encoder purely for learning beatmap embeddings
@@ -10,35 +11,30 @@ class MapEncoder(nn.Module):
     def __init__(
         self,
         input_size,
-        embed_dim: int,
-        transformer_layers: int,
-        ff_dim: int,
-        attn_heads: int,
-        noise_std: float,
+        transformer_args: TransformerArgs,
         past_frames: int,
         future_frames: int,
     ):
         super().__init__()
         self.past_frames = past_frames
         self.future_frames = future_frames
-        self.noise_std = noise_std
 
         # project input features (9 or so -> embedding dim)
-        self.proj_layer = nn.Linear(input_size, embed_dim)
+        self.proj_layer = nn.Linear(input_size, transformer_args.embed_dim)
         # learned position encodings (TODO! switch to rotating?)
         # BATCH_LENGTH is chunk lenght eg probably 2048
-        self.pos_enc = nn.Parameter(torch.randn(BATCH_LENGTH, embed_dim))
+        self.pos_enc = nn.Parameter(torch.randn(BATCH_LENGTH, transformer_args.embed_dim))
 
         # consists of an attention layer followed by 2 linear layers: embed_dim -> ff_dim -> embed_dim
         self.encoder_layer = nn.TransformerEncoderLayer(
-            d_model=embed_dim,
-            nhead=attn_heads,
-            dim_feedforward=ff_dim,
+            d_model=transformer_args.embed_dim,
+            nhead=transformer_args.attn_heads,
+            dim_feedforward=transformer_args.ff_dim,
             batch_first=True,
         )
 
         self.encoder = nn.TransformerEncoder(
-            self.encoder_layer, num_layers=transformer_layers
+            self.encoder_layer, num_layers=transformer_args.transformer_layers
         )
 
     # maps beatmap features to their respective embeddings
@@ -61,13 +57,6 @@ class MapEncoder(nn.Module):
         return self.encoder(xp, mask=mask)  # (B, T, embed_dim)
 
     def forward(self, beatmap_features, positions):
-        # gaussian noise during training
-        if self.training and self.noise_std > 0:
-            noise = torch.randn_like(positions) * self.noise_std
-            positions = positions + noise
-
-        # x = torch.cat([beatmap_features, positions], dim=-1)
-
         embeddings = self.map_embeddings(
             beatmap_features=beatmap_features
         )  # (B, T, embed_dim)

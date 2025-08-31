@@ -10,6 +10,7 @@ import osu.dataset as dataset
 
 from ..annealer import Annealer
 from ..base import OsuModel
+from ..model_utils import TransformerArgs
 from .decoder_t import ReplayDecoderT
 from .encoder_t import ReplayEncoderT
 
@@ -23,19 +24,13 @@ class OsuReplayTVAE(OsuModel):
         batch_size=64,
         device=None,
         latent_dim=64,
-        embed_dim=128,
-        transformer_layers=6,
-        ff_dim=1024,
-        attn_heads=8,
+        transformer_args: TransformerArgs = None,
         noise_std=0.0, 
         frame_window=(40, 90),
         compile: bool = True
     ):
         self.latent_dim = latent_dim
-        self.embed_dim = embed_dim
-        self.transformer_layers = transformer_layers
-        self.ff_dim = ff_dim
-        self.attn_heads = attn_heads
+        self.transformer_args = transformer_args or TransformerArgs()
         self.past_frames = frame_window[0]
         self.future_frames = frame_window[1]
         self.noise_std = noise_std
@@ -52,21 +47,15 @@ class OsuReplayTVAE(OsuModel):
     def _initialize_models(self, **kwargs):
         self.encoder = ReplayEncoderT(
             input_size=self.input_size,
-            embed_dim=self.embed_dim,
             latent_dim=self.latent_dim,
-            transformer_layers=self.transformer_layers,
-            ff_dim=self.ff_dim,
-            attn_heads=self.attn_heads,
+            transformer_args=self.transformer_args,
             noise_std=self.noise_std,
             past_frames=self.past_frames,
             future_frames=self.future_frames,
         )
         self.decoder = ReplayDecoderT(
-            embed_dim=self.embed_dim,
             latent_dim=self.latent_dim,
-            transformer_layers=self.transformer_layers,
-            ff_dim=self.ff_dim,
-            attn_heads=self.attn_heads,
+            transformer_args=self.transformer_args,
             past_frames=self.past_frames,
             future_frames=self.future_frames,
         )
@@ -164,10 +153,10 @@ class OsuReplayTVAE(OsuModel):
             "encoder": self.encoder.state_dict(),
             "decoder": self.decoder.state_dict(),
             "latent_dim": self.latent_dim,
-            "embed_dim": self.embed_dim,
-            "transformer_layers": self.transformer_layers,
-            "ff_dim": self.ff_dim,
-            "attn_heads": self.attn_heads,
+            "embed_dim": self.transformer_args.embed_dim,
+            "transformer_layers": self.transformer_args.transformer_layers,
+            "ff_dim": self.transformer_args.ff_dim,
+            "attn_heads": self.transformer_args.attn_heads,
             "noise_std": self.noise_std,
             "input_size": self.input_size,
             "past_frames": self.past_frames,
@@ -184,12 +173,16 @@ class OsuReplayTVAE(OsuModel):
 
         checkpoint = torch.load(path, map_location=device)
         
+        transformer_args = TransformerArgs(
+            embed_dim=checkpoint.get("embed_dim", 128),
+            transformer_layers=checkpoint.get("transformer_layers", 6),
+            ff_dim=checkpoint.get("ff_dim", 1024),
+            attn_heads=checkpoint.get("attn_heads", 8)
+        )
+        
         vae_args = {
             "latent_dim": checkpoint.get("latent_dim", 64),
-            "embed_dim": checkpoint.get("embed_dim", 128),
-            "transformer_layers": checkpoint.get("transformer_layers", 6),
-            "ff_dim": checkpoint.get("ff_dim", 1024),
-            "attn_heads": checkpoint.get("attn_heads", 8),
+            "transformer_args": transformer_args,
             "noise_std": checkpoint.get("noise_std", 0.0),
             "frame_window": (checkpoint.get("past_frames", 40), checkpoint.get("future_frames", 90)),
         }

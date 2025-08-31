@@ -1,10 +1,24 @@
+from dataclasses import dataclass
+from typing import Optional, Union
+
 import numpy as np
 import torch
-from typing import Union, Optional
 
-from .rnn import OsuReplayRNN
 from .gan import OsuReplayGAN
 from .keys import OsuKeyModel
+from .rnn import OsuReplayRNN
+
+
+@dataclass
+class TransformerArgs:
+    # Transformer embedding dimension
+    embed_dim: int = 128
+    # Number of transformer layers  
+    transformer_layers: int = 6
+    # Feed-forward dimension in transformer layers
+    ff_dim: int = 1024
+    # Number of attention heads
+    attn_heads: int = 8
 
 
 # wrapper around the pos and key models generate functions, returns [[x, y, k1, k2]]
