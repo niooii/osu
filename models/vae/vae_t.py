@@ -140,6 +140,7 @@ class OsuReplayTVAE(OsuModel):
     def loss_function(self, reconstructed, original, mu, logvar):
         # TODO! am i supposed to avg this? probably?
         recon_loss = F.mse_loss(reconstructed, original, reduction="sum")
+        recon_loss /= original.shape[0]
 
         kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
         kld /= original.shape[0]
