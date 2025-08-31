@@ -51,7 +51,8 @@ class ReplayDecoderT(nn.Module):
         latent_expanded = latent_code.unsqueeze(1).expand(-1, seq_len, -1)
 
         x = torch.cat([map_embeddings, latent_expanded], dim=-1)
-        decoded = self.decoder(tgt=map_embeddings, memory=x)
+        # TODO! weird hack fix later
+        decoded = self.decoder(tgt=x, memory=x)
 
         pos_out = self.pos_head(decoded)
 
