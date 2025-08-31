@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from models.base import OsuModel
-from models.model_utils import TransformerArgs
+from .model_utils import TransformerArgs
 from osu.dataset import BATCH_LENGTH
 
 FUTURE_FRAMES = 70
@@ -239,10 +239,7 @@ class OsuReplayTransformer(OsuModel):
     def _get_state_dict(self):
         return {
             'transformer': self.transformer.state_dict(),
-            'embed_dim': self.transformer_args.embed_dim,
-            'transformer_layers': self.transformer_args.transformer_layers,
-            'ff_dim': self.transformer_args.ff_dim,
-            'attn_heads': self.transformer_args.attn_heads,
+            'transformer_args': self.transformer_args.to_dict(),
             'noise_std': self.noise_std,
             'past_frames': self.past_frames,
             'future_frames': self.future_frames,
@@ -258,13 +255,8 @@ class OsuReplayTransformer(OsuModel):
         
         checkpoint = torch.load(path, map_location=device)
         
-        # load hyperparameters from checkpoint
-        transformer_args = TransformerArgs(
-            embed_dim=checkpoint.get('embed_dim', 128),
-            transformer_layers=checkpoint.get('transformer_layers', 4),
-            ff_dim=checkpoint.get('ff_dim', 1024),
-            attn_heads=checkpoint.get('attn_heads', 8)
-        )
+        # Load hyperparameters from checkpoint
+        transformer_args = TransformerArgs.from_dict(checkpoint['transformer_args'])
         
         model_args = {
             'transformer_args': transformer_args,

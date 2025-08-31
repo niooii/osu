@@ -20,6 +20,25 @@ class TransformerArgs:
     # Number of attention heads
     attn_heads: int = 8
 
+    def to_dict(self) -> dict:
+        """Convert TransformerArgs to dictionary for serialization."""
+        return {
+            'embed_dim': self.embed_dim,
+            'transformer_layers': self.transformer_layers,
+            'ff_dim': self.ff_dim,
+            'attn_heads': self.attn_heads
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'TransformerArgs':
+        """Create TransformerArgs from dictionary."""
+        return cls(
+            embed_dim=data.get('embed_dim', 128),
+            transformer_layers=data.get('transformer_layers', 6),
+            ff_dim=data.get('ff_dim', 1024),
+            attn_heads=data.get('attn_heads', 8)
+        )
+
 
 # wrapper around the pos and key models generate functions, returns [[x, y, k1, k2]]
 def generate_play(

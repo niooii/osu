@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from torch.nn.attention import sdpa_kernel, SDPBackend
+from torch.nn.attention import SDPBackend, sdpa_kernel
 
 from .model_utils import TransformerArgs
 
@@ -10,39 +10,55 @@ from .model_utils import TransformerArgs
 class ReplayCritic(nn.Module):
     def __init__(self, window_feat_dim, transformer_args: TransformerArgs = None, dropout=0.1):
         super().__init__()
-        transformer_args = transformer_args or TransformerArgs()
+        self.transformer_args = transformer_args or TransformerArgs()
         
-        self.input_proj = nn.Linear(window_feat_dim + 2, transformer_args.embed_dim)
+        self.input_proj = nn.Linear(window_feat_dim + 2, self.transformer_args.embed_dim)
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=transformer_args.embed_dim,
-            nhead=transformer_args.attn_heads,
-            dim_feedforward=transformer_args.ff_dim,
+            d_model=self.transformer_args.embed_dim,
+            nhead=self.transformer_args.attn_heads,
+            dim_feedforward=self.transformer_args.ff_dim,
             dropout=dropout,
             activation='gelu',
             batch_first=True
         )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=transformer_args.transformer_layers)
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=self.transformer_args.transformer_layers)
         self.pool = nn.AdaptiveAvgPool1d(1)
         self.mlp = nn.Sequential(
-            nn.Linear(transformer_args.embed_dim, transformer_args.embed_dim // 2),
-            nn.LayerNorm(transformer_args.embed_dim // 2),
+            nn.Linear(self.transformer_args.embed_dim, self.transformer_args.embed_dim // 2),
+            nn.LayerNorm(self.transformer_args.embed_dim // 2),
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Linear(transformer_args.embed_dim // 2, 1)
+            nn.Linear(self.transformer_args.embed_dim // 2, 1)
         )
 
-    def forward(self, windowed, positions):
-        # windowed: (B, T, W), positions: (B, T, 2)
-        x = torch.cat([windowed, positions], dim=-1)  # (B, T, W+2)
+    def forward(self, map_enc, positions):
+        # map_enc: (B, T, enc_dim), positions: (B, T, 2),
+        # T is chunk length
+        x = torch.cat([map_enc, positions], dim=-1)  # (B, T, enc_dim+2)
         x = self.input_proj(x)                        # (B, T, d_model)
 
         x = self.transformer(x)                       # (B, T, d_model)
 
         # pool over time
+        # TODO! don't pool over time why we losing temporal info
         x = x.transpose(1, 2)                         # (B, d_model, T)
         x = self.pool(x).squeeze(-1)                  # (B, d_model)
 
         score = self.mlp(x).squeeze(-1)               # (B,)
         return score
+
+    def to_dict(self):
+        return {
+            'transformer_args': self.transformer_args.to_dict()
+        }
+
+    @classmethod
+    def from_dict(cls, data, window_feat_dim, dropout=0.1):
+        transformer_args = TransformerArgs.from_dict(data['transformer_args'])
+        return cls(
+            window_feat_dim=window_feat_dim,
+            transformer_args=transformer_args,
+            dropout=dropout
+        )
 
 
 def gradient_penalty(critic, windowed, real_pos, fake_pos, device, lambda_gp=10.0):

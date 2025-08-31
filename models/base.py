@@ -291,12 +291,14 @@ class OsuModel(ABC):
         pass
 
     def _set_eval_mode(self):
+        self.training = False
         for attr_name in dir(self):
             attr = getattr(self, attr_name)
             if isinstance(attr, nn.Module):
                 attr.eval()
 
     def _set_train_mode(self):
+        self.training = True
         for attr_name in dir(self):
             attr = getattr(self, attr_name)
             if isinstance(attr, nn.Module):

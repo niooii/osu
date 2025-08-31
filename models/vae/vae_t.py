@@ -15,7 +15,7 @@ from .decoder_t import ReplayDecoderT
 from .encoder_t import ReplayEncoderT
 
 
-# switch from the RNN based VAEee to a transformer based one
+# switch from the RNN based VAE to a transformer based one
 # TODO! save hyperparam dict
 class OsuReplayTVAE(OsuModel):
     def __init__(
@@ -127,7 +127,7 @@ class OsuReplayTVAE(OsuModel):
         return mu + eps * std
 
     def forward(self, beatmap_features, positions):
-        embeddings, mu, logvar = self.encoder(beatmap_features, positions)
+        embeddings, mu, logvar = self.encoder(beatmap_features)
 
         # Sample latent code
         z = self.reparameterize(mu, logvar)
@@ -153,10 +153,7 @@ class OsuReplayTVAE(OsuModel):
             "encoder": self.encoder.state_dict(),
             "decoder": self.decoder.state_dict(),
             "latent_dim": self.latent_dim,
-            "embed_dim": self.transformer_args.embed_dim,
-            "transformer_layers": self.transformer_args.transformer_layers,
-            "ff_dim": self.transformer_args.ff_dim,
-            "attn_heads": self.transformer_args.attn_heads,
+            "transformer_args": self.transformer_args.to_dict(),
             "noise_std": self.noise_std,
             "input_size": self.input_size,
             "past_frames": self.past_frames,
@@ -173,12 +170,8 @@ class OsuReplayTVAE(OsuModel):
 
         checkpoint = torch.load(path, map_location=device)
         
-        transformer_args = TransformerArgs(
-            embed_dim=checkpoint.get("embed_dim", 128),
-            transformer_layers=checkpoint.get("transformer_layers", 6),
-            ff_dim=checkpoint.get("ff_dim", 1024),
-            attn_heads=checkpoint.get("attn_heads", 8)
-        )
+        # Load transformer configuration from checkpoint
+        transformer_args = TransformerArgs.from_dict(checkpoint["transformer_args"])
         
         vae_args = {
             "latent_dim": checkpoint.get("latent_dim", 64),
@@ -195,20 +188,21 @@ class OsuReplayTVAE(OsuModel):
         print(f"{cls.__name__} loaded from {path}")
         return instance
 
-    def generate(self, beatmap_data, num_samples=1, apply_bias_correction=True):
-        """Generate position data - returns (x, y) positions"""
+    def generate(self, beatmap_data, num_samples=1):
         self._set_eval_mode()
 
-        # with torch.no_grad():
-        #     beatmap_tensor = torch.FloatTensor(beatmap_data).to(self.device)
+        with torch.no_grad():
+            beatmap_tensor = torch.FloatTensor(beatmap_data).to(self.device)
 
-        #     batch_size = beatmap_tensor.shape[0]
+            batch_size = beatmap_tensor.shape[0]
 
-        #     # sample from prior distribution
-        #     z = torch.randn(batch_size, self.latent_dim, device=self.device)
+            # sample from prior distribution
+            z = torch.randn(batch_size, self.latent_dim, device=self.device)
+            embeddings, mu, logvar = self.encoder(beatmap_tensor)
+            # z = self.reparameterize(mu, logvar)
 
-        #     pos = self.decoder(beatmap_tensor, z)
+            pos = self.decoder(embeddings, z)
 
-        # self._set_train_mode()
+        self._set_train_mode()
 
-        # return pos.cpu().numpy()
+        return pos.cpu().numpy()

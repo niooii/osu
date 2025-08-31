@@ -14,13 +14,17 @@ class ReplayDecoderT(nn.Module):
     def __init__(
         self,
         latent_dim: int,
-        transformer_args: TransformerArgs,
+        transformer_args: TransformerArgs = None,
         past_frames: int = 0,
         future_frames: int = 0,
     ):
         super().__init__()
         
-        input_size = transformer_args.embed_dim + latent_dim
+        self.transformer_args = transformer_args or TransformerArgs()
+        self.latent_dim = latent_dim
+        self.past_frames = past_frames
+        self.future_frames = future_frames
+        input_size = self.transformer_args.embed_dim + latent_dim
         self.pos_head = nn.Sequential(
             nn.Linear(in_features=input_size, out_features=input_size // 2),
             nn.ReLU(),
@@ -28,11 +32,11 @@ class ReplayDecoderT(nn.Module):
         )
 
         self.decoder_layer = nn.TransformerDecoderLayer(
-            d_model=input_size, nhead=transformer_args.attn_heads, dim_feedforward=transformer_args.ff_dim
+            d_model=input_size, nhead=self.transformer_args.attn_heads, dim_feedforward=self.transformer_args.ff_dim
         )
 
         self.decoder = nn.TransformerDecoder(
-            decoder_layer=self.decoder_layer, num_layers=transformer_args.transformer_layers
+            decoder_layer=self.decoder_layer, num_layers=self.transformer_args.transformer_layers
         )
 
 
@@ -47,8 +51,26 @@ class ReplayDecoderT(nn.Module):
         latent_expanded = latent_code.unsqueeze(1).expand(-1, seq_len, -1)
 
         x = torch.cat([map_embeddings, latent_expanded], dim=-1)
-        decoded = self.decoder(x)
+        decoded = self.decoder(tgt=map_embeddings, memory=x)
 
         pos_out = self.pos_head(decoded)
 
         return pos_out
+
+    def to_dict(self):
+        return {
+            'transformer_args': self.transformer_args.to_dict(),
+            'latent_dim': self.latent_dim,
+            'past_frames': self.past_frames,
+            'future_frames': self.future_frames
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        transformer_args = TransformerArgs.from_dict(data['transformer_args'])
+        return cls(
+            latent_dim=data['latent_dim'],
+            transformer_args=transformer_args,
+            past_frames=data.get('past_frames', 0),
+            future_frames=data.get('future_frames', 0)
+        )
