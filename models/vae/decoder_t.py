@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from osu.dataset import BATCH_LENGTH
+
 from ..model_utils import TransformerArgs
 
 
@@ -27,6 +29,10 @@ class ReplayDecoderT(nn.Module):
         self.future_frames = future_frames
         # the embed dim must be the dim of the map embeddings
         embed_dim = self.transformer_args.embed_dim
+
+        self.pos_dec = nn.Parameter(
+            torch.randn(BATCH_LENGTH, self.transformer_args.embed_dim)
+        )
 
         self.pos_head = nn.Sequential(
             nn.Linear(in_features=embed_dim, out_features=embed_dim // 2),
@@ -60,7 +66,7 @@ class ReplayDecoderT(nn.Module):
         # TODO think on this choice, why use diff latent vector for each chunk??
         latent_expanded = latent_code.unsqueeze(1).expand(-1, seq_len, -1)
 
-        x = torch.cat([map_embeddings, latent_expanded], dim=-1)
+        x = torch.cat([map_embeddings + self.pos_dec.unsqueeze(0), latent_expanded], dim=-1)
         # project back to embed_dim
         x = self.proj_tgt(x)
 
