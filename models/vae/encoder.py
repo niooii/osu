@@ -9,8 +9,6 @@ PAST_FRAMES = 20
 
 
 class ReplayEncoder(nn.Module):
-    """Encode replay sequence to latent representation"""
-
     def __init__(self, input_size, latent_dim=32, noise_std=0.0, past_frames=PAST_FRAMES, future_frames=FUTURE_FRAMES):
         super().__init__()
         self.past_frames = past_frames
@@ -18,7 +16,8 @@ class ReplayEncoder(nn.Module):
         self.window_size = past_frames + 1 + future_frames  # +1 for current frame
 
         # Windowed beatmap features + cursor positions
-        combined_size = (input_size * self.window_size) + 2
+        # TODO! testing unconditional vae
+        combined_size = (input_size * self.window_size) # + 2
 
         self.lstm = nn.LSTM(combined_size, 128, num_layers=2, batch_first=True, dropout=0.2)
 
@@ -38,7 +37,8 @@ class ReplayEncoder(nn.Module):
             positions = positions + noise
 
         # Combine windowed beatmap features with positions
-        x = torch.cat([beatmap_features, positions], dim=-1)
+        # x = torch.cat([beatmap_features, positions], dim=-1)
+        x = beatmap_features
 
         # Encode sequence
         _, (h_n, _) = self.lstm(x)
