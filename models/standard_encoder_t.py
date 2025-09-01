@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from osu.dataset import BATCH_LENGTH
+
 from .model_utils import TransformerArgs
 
 
@@ -57,7 +58,7 @@ class MapEncoder(nn.Module):
 
         return self.encoder(xp, mask=mask)  # (B, T, embed_dim)
 
-    def forward(self, beatmap_features, positions):
+    def forward(self, beatmap_features):
         embeddings = self.map_embeddings(
             beatmap_features=beatmap_features
         )  # (B, T, embed_dim)
