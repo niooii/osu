@@ -6,73 +6,58 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import tqdm
-from models.critic import ReplayCritic, gradient_penalty
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
 import osu.dataset as dataset
 from models.base import OsuModel
-from .model_utils import TransformerArgs
-from models.standard_encoder_t import MapEncoder
-from models.vae.decoder_t import ReplayDecoderT
+from models.critic import ReplayCritic, gradient_penalty
+from models.vae.decoder import ReplayDecoder
 from models.vae.vae import OsuReplayVAE
 
+from .model_utils import TransformerArgs
 
-# same as the vae decoder transformer variant, but the z is just the noise dim
-class ReplayGenerator(ReplayDecoderT):
+
+# same as the vae decoder variant, but the z is just the noise dim
+class ReplayGenerator(ReplayDecoder):
     def __init__(
         self,
-        transformer_args: TransformerArgs,
         past_frames: int,
         future_frames: int,
         noise_dim=32,
     ):
         super().__init__(
+            input_size=len(dataset.INPUT_FEATURES),
             latent_dim=noise_dim,
-            transformer_args=transformer_args,
             past_frames=past_frames,
             future_frames=future_frames,
         )
-
-    # z: (B, noise_dim)
-    def forward(self, map_embeddings, z):
-        return super().forward(map_embeddings, z)
 
 
 # an implementation of a WGAN with a gp critic
 class OsuReplayWGAN(OsuModel):
     def __init__(
         self,
-        generator_transformer_args: TransformerArgs = None,
-        mapencoder_transformer_args: TransformerArgs = None,
-        critic_transformer_args: TransformerArgs = None,
         batch_size=64,
         device=None,
         frame_window=(20, 70),
         noise_dim=64,
         critic_steps=3,
         lambda_gp=10.0,
-        lambda_cons=1.0,
         lambda_pos=1.0,
         lr_vae=1e-4,
         lr_g=1e-4,
         lr_c=1e-4,
-        betas_vae=(0.9, 0.999),
         betas_gan=(0.5, 0.9),
     ):
-        self.generator_transformer_args = generator_transformer_args or TransformerArgs()
-        self.mapencoder_transformer_args = mapencoder_transformer_args or TransformerArgs()
-        self.critic_transformer_args = critic_transformer_args or TransformerArgs()
         self.past_frames = frame_window[0]
         self.future_frames = frame_window[1]
         self.noise_dim = noise_dim
         self.critic_steps = critic_steps
         self.lambda_gp = lambda_gp
-        self.lambda_cons = lambda_cons
         self.lambda_pos = lambda_pos
         self.lr_vae = lr_vae
         self.lr_g = lr_g
         self.lr_c = lr_c
-        self.betas_vae = betas_vae
         self.betas_gan = betas_gan
 
         super().__init__(
@@ -83,19 +68,8 @@ class OsuReplayWGAN(OsuModel):
         )
 
     def _initialize_models(self, **kwargs):
-        # get the encoder & decoder from parent
-        super()._initialize_models(**kwargs)
-
-        self.encoder = MapEncoder(
-            input_size=len(dataset.INPUT_FEATURES),
-            transformer_args=self.mapencoder_transformer_args,
-            past_frames=self.past_frames,
-            future_frames=self.future_frames
-        )
-
         # generator
         self.generator = ReplayGenerator(
-            transformer_args=self.generator_transformer_args,
             noise_dim=self.noise_dim,
             past_frames=self.past_frames,
             future_frames=self.future_frames,
@@ -107,44 +81,27 @@ class OsuReplayWGAN(OsuModel):
 
         # scores a play on realness
         self.critic = ReplayCritic(
-            window_feat_dim=window_feat_dim,
-            transformer_args=self.critic_transformer_args,
+            input_size=window_feat_dim,
         )
 
     def _initialize_optimizers(self):
-        self.opt_G = optim.AdamW(self.generator.parameters(), lr=1e-4)
-        self.opt_C = optim.AdamW(self.critic.parameters(), lr=1e-4)
+        self.opt_G = optim.AdamW(
+            self.generator.parameters(), lr=1e-4, betas=self.betas_gan
+        )
+        self.opt_C = optim.AdamW(
+            self.critic.parameters(), lr=1e-4, betas=self.betas_gan
+        )
 
     def _get_state_dict(self):
         return {
-            "encoder": self.encoder.state_dict(),
             "critic": self.critic.state_dict(),
             "generator": self.generator.state_dict(),
             "noise_dim": self.noise_dim,
-            "critic_steps": self.critic_steps,
-            "lambda_gp": self.lambda_gp,
-            "generator_transformer_args": self.generator_transformer_args.to_dict(),
-            "mapencoder_transformer_args": self.mapencoder_transformer_args.to_dict(),
-            "critic_transformer_args": self.critic_transformer_args.to_dict(),
             "past_frames": self.past_frames,
             "future_frames": self.future_frames,
         }
 
     def _load_state_dict(self, checkpoint):
-        # Strip compile prefixes since AVAE uses compile=False but checkpoint is from compiled model
-        if "encoder" in checkpoint:
-            checkpoint["encoder"] = {
-                k.replace("_orig_mod.", ""): v for k, v in checkpoint["encoder"].items()
-            }
-        if "decoder" in checkpoint:
-            checkpoint["decoder"] = {
-                k.replace("_orig_mod.", ""): v for k, v in checkpoint["decoder"].items()
-            }
-
-        if "encoder" in checkpoint:
-            self.encoder.load_state_dict(checkpoint["encoder"])
-        if "decoder" in checkpoint:
-            self.decoder.load_state_dict(checkpoint["decoder"])
         if "generator" in checkpoint:
             self.generator.load_state_dict(checkpoint["generator"])
         else:
@@ -154,16 +111,7 @@ class OsuReplayWGAN(OsuModel):
             self.critic.load_state_dict(checkpoint["critic"])
         else:
             print("No critic weights found, not loading critic")
-            
-        # Load TransformerArgs if available
-        if "generator_transformer_args" in checkpoint:
-            self.generator_transformer_args = TransformerArgs.from_dict(checkpoint["generator_transformer_args"])
-        if "mapencoder_transformer_args" in checkpoint:
-            self.mapencoder_transformer_args = TransformerArgs.from_dict(checkpoint["mapencoder_transformer_args"])
-        if "critic_transformer_args" in checkpoint:
-            self.critic_transformer_args = TransformerArgs.from_dict(checkpoint["critic_transformer_args"])
 
-    # overwrite base vae training function (this assumes the VAE has been pretrained, trains the generator and critic)
     def _train_epoch(self, epoch, total_epochs, **kwargs):
         epoch_total_loss = 0.0
         epoch_recon_loss = 0.0
@@ -173,17 +121,14 @@ class OsuReplayWGAN(OsuModel):
 
         device = self.device or torch.device("cpu")
 
-        # freeze encoder and decoder, assuming theyve been pretrained
-        self.freeze_model(model=self.encoder)
-        self.freeze_model(model=self.decoder)
-
         for j, (batch_x, batch_y_pos) in enumerate(self.train_loader):
             status_prefix = f"{j}/{len(self.train_loader)} "
             self._set_custom_train_status(status_prefix)
 
             batch_x = batch_x.to(device)
-            batch_embeddings = self.encoder(batch_x)
             batch_y_pos = batch_y_pos.to(device)
+
+            windowed_features = self.create_windowed_features(batch_x)
 
             # BATCH SIZE
             B = batch_x.shape[0]
@@ -203,17 +148,17 @@ class OsuReplayWGAN(OsuModel):
                 xi_c = torch.randn(B, self.noise_dim, device=device)
 
                 # (B, T, 2)
-                fake_pos = self.generator(batch_embeddings, noise).detach()
+                fake_pos = self.generator(windowed_features, noise).detach()
 
                 # (B,)
-                real_score = self.critic(batch_embeddings, batch_y_pos)
+                real_score = self.critic(windowed_features, batch_y_pos)
                 # (B,)
-                fake_score = self.critic(batch_embeddings, fake_pos)
+                fake_score = self.critic(windowed_features, fake_pos)
 
                 # lambda term is already multiplied in here
                 gp = gradient_penalty(
                     self.critic,
-                    batch_embeddings,
+                    windowed_features,
                     real_pos=batch_y_pos,
                     fake_pos=fake_pos,
                     device=device,
@@ -233,10 +178,11 @@ class OsuReplayWGAN(OsuModel):
             self._set_custom_train_status(status_prefix + f"Generator")
 
             xi = torch.randn(B, self.noise_dim, device=device)
-            fake = self.generator(batch_embeddings, noise)
+            fake = self.generator(windowed_features, noise)
 
             # TODO! add consistency loss prob
-            adv_loss = -self.critic(batch_embeddings, fake).mean()
+            # or mse is good enough idk lol
+            adv_loss = -self.critic(windowed_features, fake).mean()
             pos_loss = self.lambda_pos * F.smooth_l1_loss(
                 fake, batch_y_pos, reduction="mean"
             )
@@ -252,8 +198,12 @@ class OsuReplayWGAN(OsuModel):
             epoch_recon_loss += pos_loss.item()
             epoch_adv_loss += adv_loss.item()
 
-        # anneal KL at epoch end
-        # not training the VAE though, maybe itll help idk
+        # TODO anneal lambda pos, or add 'warmup phase'
+        # where the generator doesnt consider adversarial loss at all
+        # so we train the critic to recognize robotic plays while training the gen
+        # to maek these robotic plays.
+        # then after the warmup phase we introduce the adversarial loss again
+        # gigabrain or no?
         # self.annealer.step()
 
         nb = len(self.train_loader)
@@ -274,8 +224,46 @@ class OsuReplayWGAN(OsuModel):
 
             noise = torch.randn(batch_size, self.noise_dim, device=self.device)
 
-            embeddings = self.encoder(beatmap_data)
+            windowed_features = self.create_windowed_features(beatmap_tensor)
 
-            pos = self.generator(embeddings, noise)
+            pos = self.generator(windowed_features, noise)
 
         return pos.cpu().numpy()
+
+    # copied from vae
+    def create_windowed_features(self, beatmap_features):
+        batch_size, seq_len, feat_size = beatmap_features.shape
+
+        default_frame = torch.tensor(
+            dataset.DEFAULT_NORM_FRAME,
+            dtype=beatmap_features.dtype,
+            device=beatmap_features.device,
+        )
+
+        #  left padding for past frames at beginning
+        # 2 unsqueeze calls -> [1, 1, 9]
+        # expand -> [32, past_frames, 9]
+        left_pad = (
+            default_frame.unsqueeze(0)
+            .unsqueeze(0)
+            .expand(batch_size, self.past_frames, feat_size)
+        )
+
+        # right padding
+        right_pad = (
+            default_frame.unsqueeze(0)
+            .unsqueeze(0)
+            .expand(batch_size, self.future_frames, feat_size)
+        )
+
+        padded = torch.cat([left_pad, beatmap_features, right_pad], dim=1)
+
+        windows = []
+        for i in range(seq_len):
+            window = padded[:, i : i + self.past_frames + 1 + self.future_frames, :]
+
+            flat = window.reshape(batch_size, -1)
+
+            windows.append(flat)
+
+        return torch.stack(windows, dim=1)
