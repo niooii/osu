@@ -26,13 +26,13 @@ class Annealer:
         self.shape = shape
 
         if not isinstance(range, (tuple, list)) or len(range) != 2:
-            raise ValueError("Range must be a tuple or list of two numbers (min_val, max_val).")
-        min_val, max_val = range
-        if not isinstance(min_val, (int, float)) or not isinstance(max_val, (int, float)):
+            raise ValueError("Range must be a tuple or list of two numbers (start_val, end_val).")
+        start_val, end_val = range
+        if not isinstance(start_val, (int, float)) or not isinstance(end_val, (int, float)):
             raise ValueError("Range values must be numbers.")
-        if min_val >= max_val:
-            raise ValueError("Range min_val must be less than max_val.")
-        self.range = (float(min_val), float(max_val))
+        if start_val == end_val:
+            raise ValueError("Range start_val must be different from end_val.")
+        self.range = (float(start_val), float(end_val))
 
         if type(total_steps) is not int or total_steps < 1:
             raise ValueError("Argument total_steps must be an integer greater than 0")
@@ -84,13 +84,13 @@ class Annealer:
             range (tuple): Tuple of (min_val, max_val) defining the annealing range.
         """
         if not isinstance(range, (tuple, list)) or len(range) != 2:
-            raise ValueError("Range must be a tuple or list of two numbers (min_val, max_val).")
-        min_val, max_val = range
-        if not isinstance(min_val, (int, float)) or not isinstance(max_val, (int, float)):
+            raise ValueError("Range must be a tuple or list of two numbers (start_val, end_val).")
+        start_val, end_val = range
+        if not isinstance(start_val, (int, float)) or not isinstance(end_val, (int, float)):
             raise ValueError("Range values must be numbers.")
-        if min_val >= max_val:
-            raise ValueError("Range min_val must be less than max_val.")
-        self.range = (float(min_val), float(max_val))
+        if start_val == end_val:
+            raise ValueError("Range start_val must be different from end_val.")
+        self.range = (float(start_val), float(end_val))
         return
 
     def current(self):
@@ -124,6 +124,6 @@ class Annealer:
 
     def _scale_to_range(self, y):
         """Scale normalized value (0-1) to the specified range"""
-        min_val, max_val = self.range
-        y_out = y * (max_val - min_val) + min_val
+        start_val, end_val = self.range
+        y_out = y * (end_val - start_val) + start_val
         return y_out
