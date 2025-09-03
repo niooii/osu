@@ -43,6 +43,7 @@ class OsuReplayWGAN(OsuModel):
         lr_g=1e-4,
         lr_c=1e-4,
         betas_gan=(0.5, 0.9),
+        compile=False,
     ):
         self.past_frames = frame_window[0]
         self.future_frames = frame_window[1]
@@ -61,7 +62,7 @@ class OsuReplayWGAN(OsuModel):
             batch_size=batch_size,
             device=device,
             frame_window=frame_window,
-            compile=False,
+            compile=compile,
         )
 
     def _initialize_models(self, **kwargs):
