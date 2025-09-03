@@ -2,20 +2,15 @@ from os import terminal_size
 from typing import Optional
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-import tqdm
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
 import osu.dataset as dataset
+from models.annealer import Annealer
 from models.base import OsuModel
 from models.critic import ReplayCritic, gradient_penalty
 from models.vae.decoder import ReplayDecoder
-from models.vae.vae import OsuReplayVAE
-
-from .model_utils import TransformerArgs
-
 
 # same as the vae decoder variant, but the z is just the noise dim
 class ReplayGenerator(ReplayDecoder):
@@ -43,7 +38,7 @@ class OsuReplayWGAN(OsuModel):
         noise_dim=64,
         critic_steps=3,
         lambda_gp=10.0,
-        lambda_pos=1.0,
+        lambda_pos_annealer=None,
         lr_vae=1e-4,
         lr_g=1e-4,
         lr_c=1e-4,
@@ -54,11 +49,13 @@ class OsuReplayWGAN(OsuModel):
         self.noise_dim = noise_dim
         self.critic_steps = critic_steps
         self.lambda_gp = lambda_gp
-        self.lambda_pos = lambda_pos
         self.lr_vae = lr_vae
         self.lr_g = lr_g
         self.lr_c = lr_c
         self.betas_gan = betas_gan
+        self.lambda_pos_annealer = lambda_pos_annealer or Annealer(
+            total_steps=20, range=(10.0, 1.0), cyclical=False
+        )
 
         super().__init__(
             batch_size=batch_size,
@@ -86,10 +83,10 @@ class OsuReplayWGAN(OsuModel):
 
     def _initialize_optimizers(self):
         self.opt_G = optim.AdamW(
-            self.generator.parameters(), lr=1e-4, betas=self.betas_gan
+            self.generator.parameters(), lr=self.lr_g, betas=self.betas_gan
         )
         self.opt_C = optim.AdamW(
-            self.critic.parameters(), lr=1e-4, betas=self.betas_gan
+            self.critic.parameters(), lr=self.lr_c, betas=self.betas_gan
         )
 
     def _get_state_dict(self):
@@ -122,7 +119,7 @@ class OsuReplayWGAN(OsuModel):
         device = self.device or torch.device("cpu")
 
         for j, (batch_x, batch_y_pos) in enumerate(self.train_loader):
-            status_prefix = f"{j}/{len(self.train_loader)} "
+            status_prefix = f"{j}/{len(self.train_loader)} (λ_pos: {self.lambda_pos_annealer.current():.2f}) "
             self._set_custom_train_status(status_prefix)
 
             batch_x = batch_x.to(device)
@@ -135,8 +132,6 @@ class OsuReplayWGAN(OsuModel):
 
             critic_loss_accum = 0.0
 
-            noise = torch.randn(B, self.noise_dim, device=self.device)
-
             # train the critic for n steps per epoch
             for i in range(self.critic_steps):
                 self._set_custom_train_status(
@@ -148,7 +143,7 @@ class OsuReplayWGAN(OsuModel):
                 xi_c = torch.randn(B, self.noise_dim, device=device)
 
                 # (B, T, 2)
-                fake_pos = self.generator(windowed_features, noise).detach()
+                fake_pos = self.generator(windowed_features, xi_c).detach()
 
                 # (B,)
                 real_score = self.critic(windowed_features, batch_y_pos)
@@ -162,7 +157,7 @@ class OsuReplayWGAN(OsuModel):
                     real_pos=batch_y_pos,
                     fake_pos=fake_pos,
                     device=device,
-                    lambda_gp=10,
+                    lambda_gp=self.lambda_gp,
                 )
 
                 # total wgan-gp critic loss
@@ -170,6 +165,7 @@ class OsuReplayWGAN(OsuModel):
 
                 self.opt_C.zero_grad()
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=1.0)
                 self.opt_C.step()
 
                 critic_loss_accum += loss.item()
@@ -178,12 +174,12 @@ class OsuReplayWGAN(OsuModel):
             self._set_custom_train_status(status_prefix + f"Generator")
 
             xi = torch.randn(B, self.noise_dim, device=device)
-            fake = self.generator(windowed_features, noise)
+            fake = self.generator(windowed_features, xi)
 
             # TODO! add consistency loss prob
             # or mse is good enough idk lol
             adv_loss = -self.critic(windowed_features, fake).mean()
-            pos_loss = self.lambda_pos * F.smooth_l1_loss(
+            pos_loss = self.lambda_pos_annealer.current() * F.smooth_l1_loss(
                 fake, batch_y_pos, reduction="mean"
             )
 
@@ -191,6 +187,7 @@ class OsuReplayWGAN(OsuModel):
 
             self.opt_G.zero_grad()
             gen_loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.generator.parameters(), max_norm=1.0)
             self.opt_G.step()
 
             epoch_C_loss += critic_loss_accum / max(1, self.critic_steps)
@@ -198,13 +195,7 @@ class OsuReplayWGAN(OsuModel):
             epoch_recon_loss += pos_loss.item()
             epoch_adv_loss += adv_loss.item()
 
-        # TODO anneal lambda pos, or add 'warmup phase'
-        # where the generator doesnt consider adversarial loss at all
-        # so we train the critic to recognize robotic plays while training the gen
-        # to maek these robotic plays.
-        # then after the warmup phase we introduce the adversarial loss again
-        # gigabrain or no?
-        # self.annealer.step()
+        self.lambda_pos_annealer.step()
 
         nb = len(self.train_loader)
         return {

@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
+from .lstm import LSTM
 from .model_utils import TransformerArgs
 
 
@@ -10,8 +11,8 @@ class ReplayCritic(nn.Module):
     def __init__(self, input_size, lstm_hidden_size=128, lstm_layers=2, dropout=0.1):
         super().__init__()
 
-        self.lstm = nn.LSTM(
-            input_size + 2,
+        self.lstm = LSTM(
+            input_size=input_size + 2,
             hidden_size=lstm_hidden_size,
             num_layers=lstm_layers,
             batch_first=True,
@@ -33,12 +34,9 @@ class ReplayCritic(nn.Module):
         x = torch.cat([map_features, positions], dim=-1)  # (B, T, feat_dim+2)
         _, (h_n, _) = self.lstm(x)
 
-        h = h_n[-1]  # (B, T, lstm_hidden_dim)
+        h = h_n[-1]  # (B, lstm_hidden_dim)
 
-        # pool over time
         # TODO! don't pool over time why we losing temporal info
-        h = h.transpose(1, 2)  # (B, d_model, T)
-        h = self.pool(h).squeeze(-1)  # (B, d_model)
 
         score = self.mlp(h).squeeze(-1)  # (B,)
         return score
