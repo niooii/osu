@@ -143,6 +143,8 @@ class OsuModel(ABC):
 
                 self.save(additional_str=short_loss_str, save_dir=save_dir, verbose=False)
 
+            self.plot_losses()
+
     # plots all the tracked losses
     def plot_losses(self):
         if not self.training_history:

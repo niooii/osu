@@ -9,7 +9,7 @@ from torch.nn.attention import SDPBackend, sdpa_kernel
 import osu.dataset as dataset
 from models.annealer import Annealer
 from models.base import OsuModel
-from models.critic import ReplayCritic, gradient_penalty
+from models.critic import ReplayCritic, fd_gradient_penalty, gradient_penalty
 from models.vae.decoder import ReplayDecoder
 
 # same as the vae decoder variant, but the z is just the noise dim
@@ -38,8 +38,8 @@ class OsuReplayWGAN(OsuModel):
         noise_dim=64,
         critic_steps=3,
         lambda_gp=10.0,
-        lambda_pos_annealer=None,
-        lr_vae=1e-4,
+        lambda_pos=1.0,
+        lambda_adv_annealer=None,
         lr_g=1e-4,
         lr_c=1e-4,
         betas_gan=(0.5, 0.9),
@@ -50,12 +50,12 @@ class OsuReplayWGAN(OsuModel):
         self.noise_dim = noise_dim
         self.critic_steps = critic_steps
         self.lambda_gp = lambda_gp
-        self.lr_vae = lr_vae
         self.lr_g = lr_g
         self.lr_c = lr_c
         self.betas_gan = betas_gan
-        self.lambda_pos_annealer = lambda_pos_annealer or Annealer(
-            total_steps=20, range=(10.0, 1.0), cyclical=False
+        self.lambda_pos = lambda_pos
+        self.lambda_adv_annealer = lambda_adv_annealer or Annealer(
+            total_steps=20, range=(0.0, 1.0), cyclical=False
         )
 
         super().__init__(
@@ -116,11 +116,15 @@ class OsuReplayWGAN(OsuModel):
         epoch_adv_loss = 0.0
         epoch_G_loss = 0.0
         epoch_C_loss = 0.0
+        epoch_wass_dist = 0.0
 
         device = self.device or torch.device("cpu")
 
+        p_real_mean = 0.0
+        p_fake_mean = 0.0
+        p_wass = 0.0
         for j, (batch_x, batch_y_pos) in enumerate(self.train_loader):
-            status_prefix = f"{j}/{len(self.train_loader)} (λ_pos: {self.lambda_pos_annealer.current():.2f}) "
+            status_prefix = f"{j}/{len(self.train_loader)} (λ_adv: {self.lambda_adv_annealer.current():.2f}, r: {p_real_mean:.4f}, f: {p_fake_mean:.4f}, w: {p_wass:.4f}) "
             self._set_custom_train_status(status_prefix)
 
             batch_x = batch_x.to(device)
@@ -132,6 +136,7 @@ class OsuReplayWGAN(OsuModel):
             B = batch_x.shape[0]
 
             critic_loss_accum = 0.0
+
 
             # train the critic for n steps per epoch
             for i in range(self.critic_steps):
@@ -151,13 +156,23 @@ class OsuReplayWGAN(OsuModel):
                 # (B,)
                 fake_score = self.critic(windowed_features, fake_pos)
 
+                real_mean = real_score.mean().item()
+                fake_mean = fake_score.mean().item()
+                wass = real_mean - fake_mean
+
+                p_real_mean = real_mean
+                p_fake_mean = fake_mean
+                p_wass = wass
+
+                epoch_wass_dist += wass
+
                 # lambda term is already multiplied in here
-                gp = gradient_penalty(
+                gp = fd_gradient_penalty(
                     self.critic,
                     windowed_features,
                     real_pos=batch_y_pos,
-                    fake_pos=fake_pos,
-                    device=device,
+                    # fake_pos=fake_pos,
+                    # device=device,
                     lambda_gp=self.lambda_gp,
                 )
 
@@ -170,7 +185,7 @@ class OsuReplayWGAN(OsuModel):
                 self.opt_C.step()
 
                 critic_loss_accum += loss.item()
-
+                
             # train the generator now
             self._set_custom_train_status(status_prefix + f"Generator")
 
@@ -179,8 +194,8 @@ class OsuReplayWGAN(OsuModel):
 
             # TODO! add consistency loss prob
             # or mse is good enough idk lol
-            adv_loss = -self.critic(windowed_features, fake).mean()
-            pos_loss = self.lambda_pos_annealer.current() * F.smooth_l1_loss(
+            adv_loss = self.lambda_adv_annealer.current() * (-self.critic(windowed_features, fake).mean())
+            pos_loss = self.lambda_pos * F.smooth_l1_loss(
                 fake, batch_y_pos, reduction="mean"
             )
 
@@ -196,14 +211,15 @@ class OsuReplayWGAN(OsuModel):
             epoch_recon_loss += pos_loss.item()
             epoch_adv_loss += adv_loss.item()
 
-        self.lambda_pos_annealer.step()
+        self.lambda_adv_annealer.step()
 
         nb = len(self.train_loader)
         return {
             "recon": epoch_recon_loss / nb,
             "adv": epoch_adv_loss / nb,
-            "gen": epoch_G_loss / nb,
-            "critic": epoch_C_loss / nb,
+            "g": epoch_G_loss / nb,
+            "c": epoch_C_loss / nb,
+            "wass": epoch_wass_dist / (nb * self.critic_steps)
         }
 
     def generate(self, beatmap_data, **kwargs):
