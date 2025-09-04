@@ -41,26 +41,23 @@ class ReplayCritic(nn.Module):
         score = self.mlp(h).squeeze(-1)
         return score
 
-
 class ReplayCriticT(nn.Module):
-    def __init__(self, input_size, d_model=256, nhead=4, num_layers=2, dim_feedforward=512, dropout=0.1):
+    def __init__(self, input_size, d_model=256, nhead=4, num_layers=2,
+                 dim_feedforward=512, dropout=0.1, max_len=4096):
         super().__init__()
-
         self.input_proj = nn.Linear(input_size + 2, d_model)
 
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d_model,
-            nhead=nhead,
-            dim_feedforward=dim_feedforward,
-            dropout=dropout,
-            activation='gelu',
-            batch_first=True  # makes input (B,T,D)
-
+            d_model=d_model, nhead=nhead,
+            dim_feedforward=dim_feedforward, dropout=dropout,
+            activation='gelu', batch_first=True
         )
-
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
 
-        self.pool = nn.AdaptiveAvgPool1d(1)  # pool over time after transpose
+        # positional embeddings (learned)
+        self.pos_emb = nn.Embedding(max_len + 1, d_model)  # +1 so index 0 can be CLS
+        # learned cls token (at 0)
+        self.cls_token = nn.Parameter(torch.randn(1, 1, d_model))
 
         self.mlp = nn.Sequential(
             nn.Linear(d_model, d_model // 2),
@@ -69,19 +66,25 @@ class ReplayCriticT(nn.Module):
             nn.Linear(d_model // 2, 1)
         )
 
-    # TODO try with keys also? prob not gonna end well
     def forward(self, windowed, positions):
         # windowed: (B, T, W), positions: (B, T, 2)
-        x = torch.cat([windowed, positions], dim=-1)  # (B, T, W+2)
-        x = self.input_proj(x)                        # (B, T, d_model)
+        B, T, _ = windowed.shape
+        x = torch.cat([windowed, positions], dim=-1)      # (B, T, W+2)
+        x = self.input_proj(x)                            # (B, T, d_model)
 
-        x = self.transformer(x)                       # (B, T, d_model)
+        # prepend cls token
+        cls = self.cls_token.expand(B, -1, -1)            # (B, 1, d_model)
+        x = torch.cat([cls, x], dim=1)                    # (B, T+1, d_model)
 
-        # pool over time
-        x = x.transpose(1, 2)                         # (B, d_model, T)
-        x = self.pool(x).squeeze(-1)                  # (B, d_model)
-        score = self.mlp(x).squeeze(-1)               # (B,)
+        # positional indices 0..T (0 reserved for cls)
+        positions_idx = torch.arange(0, T+1, device=x.device).unsqueeze(0).expand(B, -1)
+        x = x + self.pos_emb(positions_idx)               # (B, T+1, d_model)
 
+        x = self.transformer(x)                           # (B, T+1, d_model)
+
+        # use CLS embedding
+        cls_emb = x[:, 0, :]                              # (B, d_model)
+        score = self.mlp(cls_emb).squeeze(-1)             # (B,)
         return score
 
 def gradient_penalty(critic, windowed, real_pos, fake_pos, device, lambda_gp=10.0):
