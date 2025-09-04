@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
-from .lstm import LSTM
+from .jit_lstm import JitLSTM
 from .model_utils import TransformerArgs
 
 
@@ -11,12 +11,12 @@ class ReplayCritic(nn.Module):
     def __init__(self, input_size, lstm_hidden_size=128, lstm_layers=2, dropout=0.1):
         super().__init__()
 
-        self.lstm = LSTM(
+        self.lstm = JitLSTM(
             input_size=input_size + 2,
             hidden_size=lstm_hidden_size,
             num_layers=lstm_layers,
             batch_first=True,
-            dropout=dropout,
+            dropout=0.0,
         )
 
         self.pool = nn.AdaptiveAvgPool1d(1)
