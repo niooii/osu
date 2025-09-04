@@ -40,10 +40,6 @@ class OsuModel(ABC):
         # Move models to device and optionally compile
         self._setup_device_and_compilation()
 
-        # Initialize plotting 
-        plt.ion()  # Enable interactive mode
-        self._loss_fig = None
-        self._loss_lines = {}  # Store line objects for updating
 
         # Print initialization info
         self._print_initialization_info()
@@ -148,56 +144,46 @@ class OsuModel(ABC):
 
                 self.save(additional_str=short_loss_str, save_dir=save_dir, verbose=False)
 
-            self.plot_losses()
-
     # plots all the tracked losses
     def plot_losses(self):
         if not self.training_history:
-            return  # Nothing to plot yet
+            print("No training history to plot. Train the model first.")
+            return
 
         loss_names = list(self.training_history.keys())
         num_plots = len(loss_names)
 
-        # Create figure and lines on first call
-        if self._loss_fig is None:
-            figsize = (10, 6) if num_plots == 1 else (5 * min(3, num_plots), 4 * ((num_plots + 2) // 3))
-            self._loss_fig = plt.figure(figsize=figsize)
-            
-            if num_plots == 1:
-                ax = self._loss_fig.add_subplot(111)
-                loss_name = loss_names[0]
-                line, = ax.plot([], [], label=loss_name.replace("_", " ").title())
-                ax.set_xlabel("Epoch")
-                ax.set_ylabel("Loss")
-                ax.set_title(f"{self._get_model_name()} Training Loss")
-                ax.legend()
-                self._loss_lines[loss_name] = (ax, line)
-            else:
-                cols = min(3, num_plots)
-                rows = (num_plots + cols - 1) // cols
-                
-                for i, loss_name in enumerate(loss_names):
-                    ax = self._loss_fig.add_subplot(rows, cols, i + 1)
-                    line, = ax.plot([], [], label=loss_name.replace("_", " ").title())
-                    ax.set_xlabel("Epoch")
-                    ax.set_ylabel("Loss")
-                    ax.set_title(loss_name.replace("_", " ").title())
-                    ax.legend()
-                    self._loss_lines[loss_name] = (ax, line)
-            
-            self._loss_fig.tight_layout()
-            plt.show()
+        if num_plots == 1:
+            plt.figure(figsize=(10, 6))
+            loss_name = loss_names[0]
+            plt.plot(
+                self.training_history[loss_name],
+                label=loss_name.replace("_", " ").title(),
+            )
+            plt.xlabel("Epoch")
+            plt.ylabel("Loss")
+            plt.title(f"{self._get_model_name()} Training Loss")
+            plt.legend()
+        else:
+            # Multiple subplots for multiple loss types
+            cols = min(3, num_plots)
+            rows = (num_plots + cols - 1) // cols
 
-        # Update existing lines with new data
-        for loss_name in loss_names:
-            if loss_name in self._loss_lines:
-                ax, line = self._loss_lines[loss_name]
-                epochs = list(range(len(self.training_history[loss_name])))
-                line.set_data(epochs, self.training_history[loss_name])
-                ax.relim()
-                ax.autoscale_view()
+            plt.figure(figsize=(5 * cols, 4 * rows))
 
-        plt.draw()
+            for i, loss_name in enumerate(loss_names):
+                plt.subplot(rows, cols, i + 1)
+                plt.plot(
+                    self.training_history[loss_name],
+                    label=loss_name.replace("_", " ").title(),
+                )
+                plt.xlabel("Epoch")
+                plt.ylabel("Loss")
+                plt.title(loss_name.replace("_", " ").title())
+                plt.legend()
+
+        plt.tight_layout()
+        plt.show()
 
     # if path prefix is none, it saves to .trained/.
     def save(
