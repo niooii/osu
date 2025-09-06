@@ -187,16 +187,12 @@ class OsuReplayVAE(OsuModel):
         return mu + eps * std
 
     def forward(self, beatmap_features, positions):
-        # Create windowed features
         windowed_features = self.create_windowed_features(beatmap_features)
 
-        # Encode with windowed features
         mu, logvar = self.encoder(windowed_features, positions)
 
-        # Sample latent code
         z = self.reparameterize(mu, logvar)
 
-        # Decode with windowed features
         reconstructed = self.decoder(windowed_features, z)
 
         return reconstructed, mu, logvar
@@ -204,6 +200,7 @@ class OsuReplayVAE(OsuModel):
     # recon + kl term
     def loss_function(self, reconstructed, original, mu, logvar):
         recon_loss = F.mse_loss(reconstructed, original, reduction="sum")
+        recon_loss /= original.shape[0]
 
         kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
         kld /= original.shape[0]
@@ -248,7 +245,6 @@ class OsuReplayVAE(OsuModel):
         return instance
 
     def generate(self, beatmap_data, num_samples=1, apply_bias_correction=True):
-        """Generate position data - returns (x, y) positions"""
         self._set_eval_mode()
 
         with torch.no_grad():
