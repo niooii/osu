@@ -21,7 +21,7 @@ from osu.rulesets.keys import Keys
 
 BATCH_LENGTH = 2048
 # sample rate in ms
-SAMPLE_RATE = 24
+SAMPLE_RATE = osu_core.REPLAY_SAMPLING_RATE
 
 INPUT_FEATURES = [
     'x', 'y',

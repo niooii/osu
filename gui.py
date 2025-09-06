@@ -501,7 +501,7 @@ class OsuAIGUI:
                     prev_time = curr_time
                     last_time_change_time = curr_unix_ms
 
-                REPLAY_SAMPLING_RATE = 24
+                REPLAY_SAMPLING_RATE = osu_core.REPLAY_SAMPLING_RATE
 
                 # if the prev_time didn't change for PAUSE_THRESHOLD ms, then we're paused.
                 PAUSE_THRESHOLD = 40

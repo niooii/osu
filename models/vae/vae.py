@@ -140,7 +140,7 @@ class OsuReplayVAE(OsuModel):
                 desc=f"Epoch {epoch + 1}/{total_epochs} (Beta: {self.annealer.current()})",
             )
         ):
-            self._set_custom_train_status(f"Batch {i}/{len(self.train_loader)}")
+            self._set_custom_train_status(f"Batch {i}/{len(self.train_loader)} (Beta: {self.annealer.current()})")
             batch_x = batch_x.to(self.device)             # (B, T, features)
             batch_y_pos = batch_y_pos.to(self.device)     # (B, T, pos)
 

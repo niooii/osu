@@ -5,7 +5,7 @@ import numpy as np
 import pygame
 import mutagen.mp3
 
-from osu.rulesets.core import SCREEN_HEIGHT, SCREEN_WIDTH
+from osu.rulesets.core import SCREEN_HEIGHT, SCREEN_WIDTH, REPLAY_SAMPLING_RATE
 from osu.preview import beatmap as beatmap_preview
 from osu.rulesets import beatmap as bm
 from osu.rulesets import replay as replay_module
@@ -52,7 +52,6 @@ def preview_replay_raw(ia_replay, beatmap_path: str, mods=None, audio_file=None)
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT + PROGRESS_BAR_HEIGHT))
 
     FRAME_RATE = 1000
-    REPLAY_SAMPLING_RATE = 24
 
     cx = 0
     cy = 0
@@ -302,7 +301,6 @@ def preview_training_data(xs, ys):
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT + PROGRESS_BAR_HEIGHT))
 
     FRAME_RATE = 1000
-    REPLAY_SAMPLING_RATE = 24
 
     xs_flat = xs.reshape(-1, xs.shape[-1])
     ys_flat = ys.reshape(-1, ys.shape[-1])
