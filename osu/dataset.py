@@ -203,9 +203,10 @@ class MapDataCache:
                 if obj_data.is_spinner:
                     # for spinners the time_left is different
                     if time > obj_data.time:
-                        # the spinner is ACTIVE (should be spun), increase time_left by 0.1x
-                        # of the time passed since started (spinners can last quite long)
-                        time_left = 0.1 * (time - obj_data.time)
+                        # the spinner is ACTIVE (should be spun), use sinusoidal representation
+                        # for better learning of rotating motion patterns
+                        elapsed_time = time - obj_data.time
+                        time_left = 0.1 * math.sin(elapsed_time)
                     else:
                         # the spinner is not yet active proceed as normal
                         time_left = obj_data.time - time
@@ -539,8 +540,8 @@ def replay_mapping_from_cache(limit: int = None, shuffle: bool = False) -> pd.Da
 
     return load(df)
 
-def user_replay_mapping_from_cache(user_id: int, limit: int = None, shuffle: bool = False) -> pd.DataFrame:
-    replay_cache_path = f'.data/replays-{user_id}'
+def user_replay_mapping_from_cache(user_id: int, replay_path: str = None, limit: int = None, shuffle: bool = False) -> pd.DataFrame:
+    replay_cache_path = replay_path or f'.data/replays-{user_id}'
 
     files = os.listdir(replay_cache_path)
     metafiles = [f for f in files if f.endswith('.meta')]
@@ -562,8 +563,9 @@ def user_replay_mapping_from_cache(user_id: int, limit: int = None, shuffle: boo
         with open(metafile_path, 'r') as metafile:
             meta_json = json.loads(metafile.read())
 
-        map_path = meta_json['map']
+        map_path = meta_json['map'].replace("\\", "/")
         if not os.path.exists(map_path) or not os.path.exists(replay_path):
+            print(f"missing path {map_path}")
             continue
 
         rows.append((replay_path, map_path))

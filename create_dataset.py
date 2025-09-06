@@ -3,11 +3,11 @@ import datetime
 import numpy as np
 import osu.dataset as dataset
 
-REPLAY_LIMIT = 2000
+REPLAY_LIMIT = 4999
 mrekk_id = 7562902
-obj_dataset = dataset.user_replay_mapping_from_cache(user_id=mrekk_id, limit=REPLAY_LIMIT)
+obj_dataset = dataset.user_replay_mapping_from_cache(user_id=mrekk_id, replay_path=".data/replays-7562902-merged", limit=REPLAY_LIMIT)
 
-print(len(obj_dataset))
+print(f"Got {len(obj_dataset)} good replays")
 
 input_data = dataset.input_data(obj_dataset, verbose=True)
 output_data = dataset.target_data(obj_dataset, verbose=True)
