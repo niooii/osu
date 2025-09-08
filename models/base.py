@@ -12,12 +12,17 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, TensorDataset
 
 import osu.dataset as dataset
+from osu.rulesets.core import REPLAY_SAMPLING_RATE
 
 
 # make my life a lot easier
 class OsuModel(ABC):
     def __init__(
-        self, batch_size: int = 64, device: Optional[torch.device] = None, compile: bool = True, **kwargs
+        self,
+        batch_size: int = 64,
+        device: Optional[torch.device] = None,
+        compile: bool = True,
+        **kwargs,
     ):
         self.device = device or torch.device(
             "cuda" if torch.cuda.is_available() else "cpu"
@@ -40,7 +45,6 @@ class OsuModel(ABC):
         # Move models to device and optionally compile
         self._setup_device_and_compilation()
 
-
         # Print initialization info
         self._print_initialization_info()
 
@@ -56,7 +60,7 @@ class OsuModel(ABC):
 
     # most models extract position data
     def _extract_target_data(self, output_data):
-        return output_data[:, :, :2] # gets first 2 features (x, y)
+        return output_data[:, :, :2]  # gets first 2 features (x, y)
 
     # Train model for one epoch, this will use custom imlpementations
     @abstractmethod
@@ -71,13 +75,13 @@ class OsuModel(ABC):
     ) -> np.ndarray:
         pass
 
-    # input_data and output_data are of shape (chunks, T, features), usually referred to around the codebase as 
+    # input_data and output_data are of shape (chunks, T, features), usually referred to around the codebase as
     # xs and ys when loaded
     def load_data(
         self, input_data: np.ndarray, output_data: np.ndarray, test_size: float = 0.2
     ):
 
-        # most classes will extract the cursor position data 
+        # most classes will extract the cursor position data
         target_data = self._extract_target_data(output_data)
 
         x_train, x_test, y_train, y_test = train_test_split(
@@ -107,7 +111,9 @@ class OsuModel(ABC):
 
     # trains the model for a given amount of epochs
     # set save_every to 0 if you don't want to autosave
-    def train(self, epochs: int, save_every: int = 5, save_dir: str = ".trained", **kwargs):
+    def train(
+        self, epochs: int, save_every: int = 5, save_dir: str = ".trained", **kwargs
+    ):
         if self.train_loader is None:
             raise ValueError("No data loaded. Call load_data() first.")
 
@@ -142,7 +148,9 @@ class OsuModel(ABC):
                     ]
                 )
 
-                self.save(additional_str=short_loss_str, save_dir=save_dir, verbose=False)
+                self.save(
+                    additional_str=short_loss_str, save_dir=save_dir, verbose=False
+                )
 
     # plots all the tracked losses
     def plot_losses(self):
@@ -185,6 +193,44 @@ class OsuModel(ABC):
         plt.tight_layout()
         plt.show()
 
+    # Generates play data for the given map, and plots it against real play data.
+    # accepts tensors/arrays of size (num_chunks, chunk_len, features)
+    def plot_error(
+        self,
+        beatmap_data: Union[np.ndarray, torch.Tensor],
+        real_data: Union[np.ndarray, torch.Tensor],
+        max_frames: int=1000
+    ):
+        fig = plt.figure()
+        ax = plt.axes(projection="3d")
+
+        # generate fake play TODO!
+        fake_data = self.generate(beatmap_data=beatmap_data)
+
+        # flatten along the chunks dim
+        # (frames, features)
+        map_data = beatmap_data.reshape(-1, beatmap_data.shape[2])[:max_frames]
+        rplay_data = real_data.reshape(-1, real_data.shape[2])[:max_frames]
+        fplay_data = fake_data.reshape(-1, fake_data.shape[2])[:max_frames]
+
+        rplay_pos = rplay_data[:, :2]
+        rplay_keys = rplay_data[:, 2:]
+
+        fplay_pos = fplay_data[:, :2]
+        fplay_keys = fplay_data[:, 2:]
+
+        # Data for a three-dimensional line
+        # time is in seconds
+        time = np.linspace(0, rplay_data.shape[0] * REPLAY_SAMPLING_RATE / 1000, rplay_data.shape[0])
+        ax.plot3D(time, rplay_pos[:, 0], rplay_pos[:, 1], "green")
+        ax.plot3D(time, fplay_pos[:, 0], fplay_pos[:, 1], "red")
+
+    # Randomly selects a chunk in the loaded data, then generates play data for it,
+    # and plots it against real play data.
+    def plot_error_loaded_data(self, max_frames: int = 1000, random_seed: int = 42):
+
+        pass
+
     # if path prefix is none, it saves to .trained/.
     def save(
         self,
@@ -194,7 +240,7 @@ class OsuModel(ABC):
     ) -> str:
 
         model_name_lower = self._get_model_name().lower()
-        save_dir = save_dir.rstrip('/') if save_dir is not None else ".trained"
+        save_dir = save_dir.rstrip("/") if save_dir is not None else ".trained"
 
         timestamp = datetime.datetime.now().strftime("%m-%d_%H-%M-%S")
         save_path = f"{save_dir}/{model_name_lower}_{timestamp}{("_" + additional_str) if additional_str is not None else ""}"
@@ -229,7 +275,6 @@ class OsuModel(ABC):
 
     # Helper functions for freezing parameters/entire models
 
-
     @staticmethod
     def set_requires_grad(model: nn.Module, requires_grad: bool):
         for p in model.parameters():
@@ -244,7 +289,6 @@ class OsuModel(ABC):
     def unfreeze_model(model: nn.Module):
         OsuModel.set_requires_grad(model, True)
         model.train()
-
 
     # Helper methods that subclasses can override if needed
 
@@ -304,4 +348,3 @@ class OsuModel(ABC):
             attr = getattr(self, attr_name)
             if isinstance(attr, nn.Module):
                 attr.train()
-

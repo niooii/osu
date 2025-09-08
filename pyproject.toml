@@ -26,6 +26,7 @@ dependencies = [
     "torch>=2.7.0",
     "torchvision>=0.22.0",
     "keyboard>=0.13.5",
+    "ipympl>=0.9.7",
 ]
 
 [[tool.uv.index]]

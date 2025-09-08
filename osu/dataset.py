@@ -1,3 +1,4 @@
+# this file is horrid
 # TODO! cleanup code and make generation per pair instead of
 # all maps first and then all replays
 
@@ -362,13 +363,15 @@ def load(files, verbose=0) -> pd.DataFrame:
     return pd.DataFrame(list(zip(replays, beatmaps)), columns=['replay', 'beatmap'])
 
 
-# extract the data for a single replay
-def replay_to_output_data(beatmap: osu_beatmap.Beatmap, replay: osu_replay.Replay):
-    target_data = []
+def target_data_single(beatmap: osu_beatmap.Beatmap, replay: osu_replay.Replay):
+    if len(beatmap.effective_hit_objects) == 0:
+        return
 
+    target_data = []
     chunk = []
+
     for time in range(beatmap.start_offset(), beatmap.length(), SAMPLE_RATE):
-        x, y, k1, k2 = _replay_frame(beatmap, replay, time)
+        x, y, k1, k2 = _replay_frame(replay, time)
 
         chunk.append(np.array([x - 0.5, y - 0.5, k1, k2]))
 
@@ -379,7 +382,10 @@ def replay_to_output_data(beatmap: osu_beatmap.Beatmap, replay: osu_replay.Repla
     if len(chunk) > 0:
         target_data.append(chunk)
 
-    return target_data
+    data = pad_play_frames(target_data, maxlen=BATCH_LENGTH)
+
+    return data
+    
 
 
 def target_data(dataset: pd.DataFrame, verbose=False):
@@ -503,6 +509,7 @@ def input_data(dataset, verbose=False) -> pd.DataFrame:
 
 
 import json
+
 import tqdm
 
 
