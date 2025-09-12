@@ -20,7 +20,7 @@ import osu.rulesets.hitobjects as ho
 import osu.rulesets.replay as osu_replay
 from osu.rulesets.keys import Keys
 
-BATCH_LENGTH = 2048
+SEQ_LEN = 2048
 # sample rate in ms
 SAMPLE_RATE = osu_core.REPLAY_SAMPLING_RATE
 
@@ -76,8 +76,9 @@ class MapDataCache:
         # stores any precomputed data here
         data: dict[str, typing.Any]
 
-    def __init__(self, beatmap: osu_beatmap.Beatmap):
+    def __init__(self, beatmap: osu_beatmap.Beatmap, sample_rate: int = SAMPLE_RATE):
         self.beatmap = beatmap
+        self.sample_rate = sample_rate
         
         self.preempt, _ = beatmap.approach_rate()
         self.circle_size = beatmap.circle_size() / 10.0
@@ -189,7 +190,7 @@ class MapDataCache:
         end_time = self.beatmap.length()
         
         # Pre-compute visible objects for each time point
-        for time in range(start_time, end_time, SAMPLE_RATE):
+        for time in range(start_time, end_time, self.sample_rate):
             visible_objects = self._find_visible_objects_at_time(time)
             
             if visible_objects:
@@ -363,32 +364,32 @@ def load(files, verbose=0) -> pd.DataFrame:
     return pd.DataFrame(list(zip(replays, beatmaps)), columns=['replay', 'beatmap'])
 
 
-def target_data_single(beatmap: osu_beatmap.Beatmap, replay: osu_replay.Replay):
+def target_data_single(beatmap: osu_beatmap.Beatmap, replay: osu_replay.Replay, seq_len: int = SEQ_LEN, sample_rate: int = SAMPLE_RATE):
     if len(beatmap.effective_hit_objects) == 0:
         return
 
     target_data = []
     chunk = []
 
-    for time in range(beatmap.start_offset(), beatmap.length(), SAMPLE_RATE):
+    for time in range(beatmap.start_offset(), beatmap.length(), sample_rate):
         x, y, k1, k2 = _replay_frame(replay, time)
 
         chunk.append(np.array([x - 0.5, y - 0.5, k1, k2]))
 
-        if len(chunk) == BATCH_LENGTH:
+        if len(chunk) == seq_len:
             target_data.append(chunk)
             chunk = []
 
     if len(chunk) > 0:
         target_data.append(chunk)
 
-    data = pad_play_frames(target_data, maxlen=BATCH_LENGTH)
+    data = pad_play_frames(target_data, maxlen=seq_len)
 
     return data
     
 
 
-def target_data(dataset: pd.DataFrame, verbose=False):
+def target_data(dataset: pd.DataFrame, verbose=False, seq_len: int = SEQ_LEN, sample_rate: int = SAMPLE_RATE):
     """Given a osu! ruleset dataset for replays and maps, generate a
     new DataFrame with replay cursor position across time."""
 
@@ -403,20 +404,20 @@ def target_data(dataset: pd.DataFrame, verbose=False):
 
         chunk = []
 
-        for time in range(beatmap.start_offset(), beatmap.length(), SAMPLE_RATE):
+        for time in range(beatmap.start_offset(), beatmap.length(), sample_rate):
             x, y, k1, k2 = _replay_frame(replay, time)
 
             chunk.append(np.array([x - 0.5, y - 0.5, k1, k2]))
 
-            if len(chunk) == BATCH_LENGTH:
+            if len(chunk) == seq_len:
                 target_data.append(chunk)
                 chunk = []
 
         if len(chunk) > 0:
             target_data.append(chunk)
 
-    data = pad_play_frames(target_data, maxlen=BATCH_LENGTH)
-    index = pd.MultiIndex.from_product([range(len(data)), range(BATCH_LENGTH)], names=['chunk', 'frame'])
+    data = pad_play_frames(target_data, maxlen=seq_len)
+    index = pd.MultiIndex.from_product([range(len(data)), range(seq_len)], names=['chunk', 'frame'])
     return pd.DataFrame(np.reshape(data, (-1, len(OUTPUT_FEATURES))), index=index, columns=OUTPUT_FEATURES,
                         dtype=np.float32)
 
@@ -432,16 +433,16 @@ def _replay_frame(replay, time):
     return x, y, k1, k2
 
 
-def get_beatmap_time_data(beatmap: osu_beatmap.Beatmap) -> []:
+def get_beatmap_time_data(beatmap: osu_beatmap.Beatmap, seq_len: int = SEQ_LEN, sample_rate: int = SAMPLE_RATE) -> []:
     if len(beatmap.effective_hit_objects) == 0:
         return None
 
-    precomputed = MapDataCache(beatmap)
+    precomputed = MapDataCache(beatmap, sample_rate)
     
     data = []
     chunk = []
 
-    for time in range(beatmap.start_offset(), beatmap.length(), SAMPLE_RATE):
+    for time in range(beatmap.start_offset(), beatmap.length(), sample_rate):
         frame_data = precomputed.get_frame_data(time)
 
         if frame_data is None:
@@ -467,7 +468,7 @@ def get_beatmap_time_data(beatmap: osu_beatmap.Beatmap) -> []:
             slider_len
         ]))
 
-        if len(chunk) == BATCH_LENGTH:
+        if len(chunk) == seq_len:
             data.append(chunk)
             chunk = []
 
@@ -477,7 +478,7 @@ def get_beatmap_time_data(beatmap: osu_beatmap.Beatmap) -> []:
     return data
 
 
-def input_data(dataset, verbose=False) -> pd.DataFrame:
+def input_data(dataset, verbose=False, seq_len: int = SEQ_LEN, sample_rate: int = SAMPLE_RATE) -> pd.DataFrame:
     """Given a osu! ruleset dataset for replays and maps, generate a
     new DataFrame with beatmap object information across time."""
 
@@ -493,14 +494,14 @@ def input_data(dataset, verbose=False) -> pd.DataFrame:
                                     total=len(beatmaps))
     for index, beatmap in prog:
         prog.set_description(f'Turning {beatmap.title()} into time series data')
-        chunks = get_beatmap_time_data(beatmap)
+        chunks = get_beatmap_time_data(beatmap, seq_len=seq_len, sample_rate=sample_rate)
         if chunks is not None:
             data.extend(chunks)
 
-    data = pad_map_frames(data, max_len=BATCH_LENGTH)
+    data = pad_map_frames(data, max_len=seq_len)
 
     index = pd.MultiIndex.from_product([
-        range(len(data)), range(BATCH_LENGTH)
+        range(len(data)), range(seq_len)
     ], names=['chunk', 'frame'])
 
     # print(data.shape)

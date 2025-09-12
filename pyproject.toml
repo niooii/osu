@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "arguably>=1.2.5",
     "beautifulsoup4>=4.13.4",
     "dearpygui>=2.1.0",
     "dxcam>=0.0.5",

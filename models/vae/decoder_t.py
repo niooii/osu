@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from osu.dataset import BATCH_LENGTH
+from osu.dataset import SEQ_LEN
 
 from ..model_utils import TransformerArgs
 
@@ -31,7 +31,7 @@ class ReplayDecoderT(nn.Module):
         embed_dim = self.transformer_args.embed_dim
 
         self.pos_dec = nn.Parameter(
-            torch.randn(BATCH_LENGTH, self.transformer_args.embed_dim)
+            torch.randn(SEQ_LEN, self.transformer_args.embed_dim)
         )
 
         self.pos_head = nn.Sequential(

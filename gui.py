@@ -401,7 +401,7 @@ class OsuAIGUI:
             cache_key = create_cache_key(start_md5, self.mods)
             if cache_key not in self.map_frames_cache:
                 data = dataset.input_data(self.map.beatmap)
-                data = np.reshape(data.values, (-1, dataset.BATCH_LENGTH, len(dataset.INPUT_FEATURES)))
+                data = np.reshape(data.values, (-1, dataset.SEQ_LEN, len(dataset.INPUT_FEATURES)))
                 data = torch.FloatTensor(data)
                 self.map_frames_cache[cache_key] = data
 

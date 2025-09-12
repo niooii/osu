@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from osu.dataset import BATCH_LENGTH
+from osu.dataset import SEQ_LEN
 
 from ..model_utils import TransformerArgs
 
@@ -29,9 +29,9 @@ class ReplayEncoderT(nn.Module):
         # project input features (9 or so -> embedding dim)
         self.proj_layer = nn.Linear(input_size, self.transformer_args.embed_dim)
         # learned position encodings (TODO! switch to rotating?)
-        # BATCH_LENGTH is chunk lenght eg probably 2048
+        # SEQ_LEN is chunk lenght eg probably 2048
         self.pos_enc = nn.Parameter(
-            torch.randn(BATCH_LENGTH, self.transformer_args.embed_dim)
+            torch.randn(SEQ_LEN, self.transformer_args.embed_dim)
         )
 
         # consists of an attention layer followed by 2 linear layers: embed_dim -> ff_dim -> embed_dim
@@ -74,7 +74,7 @@ class ReplayEncoderT(nn.Module):
         # run it through the transformer layers
         # the mask gives a sliding window of context, allowing future frames to be attended to
         mask = self.local_mask(
-            BATCH_LENGTH,
+            SEQ_LEN,
             past_frames=self.past_frames,
             future_frames=self.future_frames,
         )

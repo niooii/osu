@@ -6,7 +6,7 @@ import torch.nn.functional as F
 
 from models.base import OsuModel
 from .model_utils import TransformerArgs
-from osu.dataset import BATCH_LENGTH
+from osu.dataset import SEQ_LEN
 
 FUTURE_FRAMES = 70
 PAST_FRAMES = 20
@@ -38,8 +38,8 @@ class ReplayTransformer(nn.Module):
         # project input features (9 or so -> embedding dim)
         self.proj_layer = nn.Linear(self.input_size, self.transformer_args.embed_dim)
         # learned position encodings (TODO! switch to rotating?)
-        # BATCH_LENGTH is chunk lenght eg probably 2048
-        self.pos_enc = nn.Parameter(torch.randn(BATCH_LENGTH, self.transformer_args.embed_dim))
+        # SEQ_LEN is chunk lenght eg probably 2048
+        self.pos_enc = nn.Parameter(torch.randn(SEQ_LEN, self.transformer_args.embed_dim))
 
         # consists of an attention layer followed by 2 linear layers: embed_dim -> ff_dim -> embed_dim
         self.encoder_layer = nn.TransformerEncoderLayer(
@@ -81,7 +81,7 @@ class ReplayTransformer(nn.Module):
         # run it through the transformer layers
         # the mask gives a sliding window of context, allowing future frames to be attended to
         mask = self.local_mask(
-            BATCH_LENGTH, 
+            SEQ_LEN, 
             past_frames=self.past_frames, 
             future_frames=self.future_frames, 
         )
@@ -111,7 +111,7 @@ class ReplayTransformer(nn.Module):
         play_embeddings = self.proj_output_layer(dec_in)
 
         tgt_mask = self.local_mask(T=T_dec, past_frames=T_dec, future_frames=0)
-        mem_mask = self.cross_attn_mask(T_dec=T_dec, T_enc=BATCH_LENGTH, past_frames=120)
+        mem_mask = self.cross_attn_mask(T_dec=T_dec, T_enc=SEQ_LEN, past_frames=120)
 
         # (B, T, embed_dim)
         dec_out = self.decoder(tgt=play_embeddings, tgt_mask=tgt_mask, memory=map_embeddings, memory_mask=mem_mask)

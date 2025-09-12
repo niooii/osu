@@ -13,7 +13,7 @@ from osu import dataset
 from osu.rulesets.mods import Mods
 
 
-def preview_replay_raw(ia_replay, beatmap_path: str, mods=None, audio_file=None):
+def preview_replay_raw(ia_replay, beatmap_path: str, mods=None, audio_file=None, sample_rate: int = REPLAY_SAMPLING_RATE):
     """
     Preview a replay with beatmap visualization using raw replay data
 
@@ -174,7 +174,7 @@ def preview_replay_raw(ia_replay, beatmap_path: str, mods=None, audio_file=None)
         # cx, cy, z = my_replay.frame(time)
         # pygame.draw.circle(screen, (255, 0, 0), (int(cx), int(cy)), 8)
 
-        frame = int((time - beatmap.start_offset()) // REPLAY_SAMPLING_RATE)
+        frame = int((time - beatmap.start_offset()) // sample_rate)
         # print(f'we on frame {frame}')
         if 0 < frame < len(ia_replay):
             x, y, k1, k2 = ia_replay[frame]
@@ -289,7 +289,7 @@ def preview_replay(replay: replay_module.Replay, beatmap_path: str, audio_file=N
 
 
 # quick way to check the sanity of a dataset
-def preview_training_data(xs, ys):
+def preview_training_data(xs, ys, sample_rate: int = REPLAY_SAMPLING_RATE):
     pygame.init()
 
     pygame.display.set_caption('Data Preview')
@@ -319,7 +319,7 @@ def preview_training_data(xs, ys):
     dragging_progress = False
     was_paused_before_drag = False
     progress_start_time = 0
-    progress_end_time = total_frames * REPLAY_SAMPLING_RATE  # Total duration in ms
+    progress_end_time = total_frames * sample_rate  # Total duration in ms
     
     progress_bar_y = SCREEN_HEIGHT + 10
     progress_bar_height = 4
@@ -367,7 +367,7 @@ def preview_training_data(xs, ys):
         screen.fill((0, 0, 0))
 
         # Calculate current frame
-        frame = int(time // REPLAY_SAMPLING_RATE)
+        frame = int(time // sample_rate)
         
         if 0 <= frame < total_frames:
             # Draw 3 green circles from xs data (current, previous, next frames)
