@@ -248,7 +248,7 @@ def preview_replay_raw(ia_replay, beatmap_path: str, mods=None, audio_file=None,
     pygame.quit()
 
 
-def preview_replay(replay: replay_module.Replay, beatmap_path: str, audio_file=None):
+def preview_replay(replay: replay_module.Replay, beatmap_path: str, audio_file=None, sampling_rate: int=dataset.SAMPLE_RATE):
     """
     Preview a replay with beatmap visualization using a Replay object
     
@@ -274,7 +274,7 @@ def preview_replay(replay: replay_module.Replay, beatmap_path: str, audio_file=N
 
     beatmap.apply_mods(mods)
 
-    replay_data = dataset.replay_to_output_data(beatmap, replay)
+    replay_data = dataset.target_data_single(beatmap, replay, sample_rate=sampling_rate)
 
     # Flatten
     ia_replay = []
