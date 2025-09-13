@@ -193,39 +193,115 @@ class OsuModel(ABC):
         plt.tight_layout()
         plt.show()
 
-    # Generates play data for the given map, and plots it against real play data.
+    # displays metrics on a model's performance without requiring you to watch a replay
     # accepts tensors/arrays of size (num_chunks, chunk_len, features)
-    def plot_error(
+    def display_metrics(
         self,
         beatmap_data: Union[np.ndarray, torch.Tensor],
         real_data: Union[np.ndarray, torch.Tensor],
-        max_frames: int=1000
+        max_frames: int=1000,
+        plot_mode: str="3d",
+        samples: int=1
     ):
-        fig = plt.figure()
-        ax = plt.axes(projection="3d")
-
-        # generate fake play TODO!
-        fake_data = self.generate(beatmap_data=beatmap_data)
+        samples = min(samples, 15)
+        fake_data_list = []
+        for _ in range(samples):
+            fake_data_list.append(self.generate(beatmap_data=beatmap_data))
 
         # flatten along the chunks dim
         # (frames, features)
         map_data = beatmap_data.reshape(-1, beatmap_data.shape[2])[:max_frames]
         rplay_data = real_data.reshape(-1, real_data.shape[2])[:max_frames]
-        fplay_data = fake_data.reshape(-1, fake_data.shape[2])[:max_frames]
+        
+        fplay_data_list = []
+        for fake_data in fake_data_list:
+            fplay_data_list.append(fake_data.reshape(-1, fake_data.shape[2])[:max_frames])
 
+        # plot real data against fake data
         rplay_pos = rplay_data[:, :2]
         rplay_keys = rplay_data[:, 2:]
 
-        fplay_pos = fplay_data[:, :2]
-        fplay_keys = fplay_data[:, 2:]
-
-        # Data for a three-dimensional line
         # time is in seconds
         time = np.linspace(0, rplay_data.shape[0] * REPLAY_SAMPLING_RATE / 1000, rplay_data.shape[0])
-        ax.plot3D(time, rplay_pos[:, 0], rplay_pos[:, 1], "green")
-        ax.plot3D(time, fplay_pos[:, 0], fplay_pos[:, 1], "red")
+        
+        # color palette for samples
+        colors = ['red', 'blue', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan', 'magenta', 
+                 'yellow', 'lime', 'indigo', 'teal', 'maroon']
+        
+        # position plot and key press plot
+        if plot_mode == "2d":
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
+            ax1.plot(time, rplay_pos[:, 0] + rplay_pos[:, 1], "green", label="Real")
+            for i, fplay_data in enumerate(fplay_data_list):
+                fplay_pos = fplay_data[:, :2]
+                color = colors[i % len(colors)]
+                label = "Generated" if i == 0 else None
+                ax1.plot(time, fplay_pos[:, 0] + fplay_pos[:, 1], color, label=label, linewidth=0.8, alpha=0.7)
+            ax1.set_ylabel("X + Y Position")
+            ax1.legend()
+            ax1.set_title("Cursor Position")
+        else:
+            fig = plt.figure(figsize=(12, 8))
+            ax1 = fig.add_subplot(2, 1, 1, projection='3d')
+            ax1.plot3D(time, rplay_pos[:, 0], rplay_pos[:, 1], "green", label="Real")
+            for i, fplay_data in enumerate(fplay_data_list):
+                fplay_pos = fplay_data[:, :2]
+                color = colors[i % len(colors)]
+                label = "Generated" if i == 0 else None
+                ax1.plot3D(time, fplay_pos[:, 0], fplay_pos[:, 1], color, label=label, alpha=0.7)
+            ax1.legend()
+            ax1.set_title("Cursor Position (3D)")
+            ax2 = fig.add_subplot(2, 1, 2)
+        
+        # plot keypresses
+        ax2.set_ylim(-0.5, 1.5)
+        ax2.set_ylabel("Keys")
+        ax2.set_xlabel("Time (s)")
+        ax2.set_yticks([0, 1])
+        ax2.set_yticklabels(["K1", "K2"])
+        ax2.set_title("Key Presses")
+        
+        for key_idx in range(min(2, rplay_keys.shape[1])):  # k1 and k2
+            key_pressed = (rplay_keys[:, key_idx] > 0.5).astype(int)
+            key_diff = np.diff(np.concatenate([[0], key_pressed, [0]]))
+            starts = np.where(key_diff == 1)[0]
+            ends = np.where(key_diff == -1)[0]
+            
+            for start, end in zip(starts, ends):
+                ax2.axvspan(time[start], time[end-1], ymin=key_idx/2, ymax=(key_idx+1)/2, 
+                           color='green', alpha=0.5)
+            
+            for i, fplay_data in enumerate(fplay_data_list):
+                fplay_keys = fplay_data[:, 2:]
+                color = colors[i % len(colors)]
+                key_pressed = (fplay_keys[:, key_idx] > 0.5).astype(int)
+                key_diff = np.diff(np.concatenate([[0], key_pressed, [0]]))
+                starts = np.where(key_diff == 1)[0]
+                ends = np.where(key_diff == -1)[0]
+                
+                for start, end in zip(starts, ends):
+                    ax2.axvspan(time[start], time[end-1], ymin=key_idx/2, ymax=(key_idx+1)/2, 
+                               color=color, alpha=0.3)
+        
+        plt.tight_layout()
 
-    # Randomly selects a chunk in the loaded data, then generates play data for it,
+        if samples > 1:
+            def mae(p1, p2):
+                return np.mean(np.abs(p1 - p2))
+
+            def mse(p1, p2):
+                return np.mean((p1 - p2) ** 2) 
+
+            avg_mae = np.average([mae(fake_data_list[i], fake_data_list[i+1]) for i in range(samples-1)])
+            avg_mse = np.average([mse(fake_data_list[i], fake_data_list[i+1]) for i in range(samples-1)])
+
+            print(f"MAE: {avg_mae}")
+            print(f"MSE: {avg_mse}")
+        else:
+            print(f"MAE and MSE not available for sample size of {samples}")
+
+
+    # randomly selects a chunk in the loaded data, then generates play data for it,
     # and plots it against real play data.
     def plot_error_loaded_data(self, max_frames: int = 1000, random_seed: int = 42):
 

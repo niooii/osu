@@ -1,4 +1,5 @@
 from typing import Optional
+import numpy as np
 
 import torch
 import torch.nn as nn
@@ -244,7 +245,7 @@ class OsuReplayVAE(OsuModel):
         print(f"{cls.__name__} loaded from {path}")
         return instance
 
-    def generate(self, beatmap_data, num_samples=1, apply_bias_correction=True):
+    def generate(self, beatmap_data, num_samples=1):
         self._set_eval_mode()
 
         with torch.no_grad():
@@ -260,6 +261,4 @@ class OsuReplayVAE(OsuModel):
 
             pos = self.decoder(windowed_features, z)
 
-        self._set_train_mode()
-
-        return pos.cpu().numpy()
+        return np.pad(pos.cpu().numpy(), ((0, 0), (0, 0), (0, 2)), mode='constant', constant_values=0)
