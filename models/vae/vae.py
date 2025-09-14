@@ -183,7 +183,7 @@ class OsuReplayVAE(OsuModel):
             mu_m = mu.mean().item(); mu_s = mu.std().item()
             lv_m = logvar.mean().item(); lv_s = logvar.std().item()
             self._set_custom_train_status(
-                f"Batch {i}/{len(self.train_loader)} | mu:{mu_m:.4f}/{mu_s:.4f} lv:{lv_m:.4f}/{lv_s:.4f} KL:{kl_loss.item():.4f} bKL:{(beta*kl_loss.item()):.4f} β:{beta:.3f}"
+                f"Batch {i}/{len(self.train_loader)} | mu:{mu_m:.4f}/{mu_s:.4f} lv:{lv_m:.4f}/{lv_s:.4f} β:{beta:.3f}"
             )
 
         # Calculate average losses
@@ -200,7 +200,7 @@ class OsuReplayVAE(OsuModel):
             "total_loss": avg_total_loss,
             "recon_loss": avg_recon_loss,
             "kl_loss": avg_kl_loss,
-            "kl_weighted": avg_kl_weighted_loss,
+            "βkl": avg_kl_weighted_loss,
             "spinner_loss": avg_spinner_loss,
         }
 
