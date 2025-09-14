@@ -61,6 +61,7 @@ class OsuReplayTVAE(OsuModel):
             transformer_args=self.transformer_args,
             past_frames=self.past_frames,
             future_frames=self.future_frames,
+            seq_len=self.seq_len
         )
 
     def _initialize_optimizers(self):
