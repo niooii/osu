@@ -15,6 +15,7 @@ class ReplayEncoderT(nn.Module):
         latent_dim: int,
         transformer_args: TransformerArgs = None,
         noise_std: float = 0.0,
+        seq_len: int = SEQ_LEN,
         past_frames: int = 40,
         future_frames: int = 120,
     ):
@@ -31,7 +32,7 @@ class ReplayEncoderT(nn.Module):
         # learned position encodings (TODO! switch to rotating?)
         # SEQ_LEN is chunk lenght eg probably 2048
         self.pos_enc = nn.Parameter(
-            torch.randn(SEQ_LEN, self.transformer_args.embed_dim)
+            torch.randn(seq_len, self.transformer_args.embed_dim)
         )
 
         # consists of an attention layer followed by 2 linear layers: embed_dim -> ff_dim -> embed_dim
