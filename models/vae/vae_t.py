@@ -75,7 +75,9 @@ class OsuReplayTVAE(OsuModel):
         epoch_total_loss = 0
         epoch_recon_loss = 0
         epoch_kl_loss = 0
+        epoch_kl_weighted_loss = 0
 
+        beta = self.annealer.current()
         for i, (batch_x, batch_y_pos) in enumerate(
             tqdm.tqdm(
                 self.train_loader,
@@ -84,7 +86,7 @@ class OsuReplayTVAE(OsuModel):
                 desc=f"Epoch {epoch + 1}/{total_epochs} (Beta: {self.annealer.current()})",
             )
         ):
-            self._set_custom_train_status(f"Batch {i}/{len(self.train_loader)}")
+            # custom status with posterior stats (mu/logvar)
             batch_x = batch_x.to(self.device)             # (B, T, features)
             batch_y_pos = batch_y_pos.to(self.device)     # (B, T, pos)
 
@@ -109,11 +111,19 @@ class OsuReplayTVAE(OsuModel):
             epoch_total_loss += total_loss.item()
             epoch_recon_loss += recon_loss.item()
             epoch_kl_loss += kl_loss.item()
+            epoch_kl_weighted_loss += (beta * kl_loss.item())
+
+            mu_m = mu.mean().item(); mu_s = mu.std().item()
+            lv_m = logvar.mean().item(); lv_s = logvar.std().item()
+            self._set_custom_train_status(
+                f"Batch {i}/{len(self.train_loader)} | mu:{mu_m:.4f}/{mu_s:.4f} lv:{lv_m:.4f}/{lv_s:.4f} KL:{kl_loss.item():.4f} bKL:{(beta*kl_loss.item()):.4f} β:{beta:.3f}"
+            )
 
         # Calculate average losses
         avg_total_loss = epoch_total_loss / len(self.train_loader)
         avg_recon_loss = epoch_recon_loss / len(self.train_loader)
         avg_kl_loss = epoch_kl_loss / len(self.train_loader)
+        avg_kl_weighted_loss = epoch_kl_weighted_loss / len(self.train_loader)
 
         # Step the annealer
         self.annealer.step()
@@ -122,6 +132,7 @@ class OsuReplayTVAE(OsuModel):
             "total_loss": avg_total_loss,
             "recon_loss": avg_recon_loss,
             "kl_loss": avg_kl_loss,
+            "kl_weighted": avg_kl_weighted_loss,
         }
 
     # allow backpropogatino through sampling
@@ -131,7 +142,8 @@ class OsuReplayTVAE(OsuModel):
         return mu + eps * std
 
     def forward(self, beatmap_features, positions):
-        embeddings, mu, logvar = self.encoder(beatmap_features)
+        # (B, T, embed_dim), (B, L), (B, L)
+        embeddings, mu, logvar = self.encoder(beatmap_features, positions)
 
         # Sample latent code
         z = self.reparameterize(mu, logvar)
@@ -142,12 +154,14 @@ class OsuReplayTVAE(OsuModel):
 
     # recon + kl term
     def loss_function(self, reconstructed, original, mu, logvar):
-        # TODO! am i supposed to avg this? probably?
-        recon_loss = F.mse_loss(reconstructed, original, reduction="sum")
-        recon_loss /= original.shape[0]
+        # average over all elements for stable magnitudes
+        # (B, T, 2) vs (B, T, 2)
+        recon_loss = F.mse_loss(reconstructed, original, reduction="mean")
 
-        kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-        kld /= original.shape[0]
+        # KL per-sample (sum over latent dims), then mean over batch
+        # mu/logvar: (B, L)
+        kld_per = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)  # (B)
+        kld = kld_per.mean()
 
         total_loss = recon_loss + self.annealer(kld)
 
@@ -203,7 +217,8 @@ class OsuReplayTVAE(OsuModel):
 
             # sample from prior distribution
             z = torch.randn(batch_size, self.latent_dim, device=self.device)
-            embeddings, mu, logvar = self.encoder(beatmap_tensor)
+            # only need map embeddings for inference (no positions available)
+            embeddings = self.encoder.map_embeddings(beatmap_tensor)  # (B, T, embed_dim)
             # z = self.reparameterize(mu, logvar)
 
             pos = self.decoder(embeddings, z)

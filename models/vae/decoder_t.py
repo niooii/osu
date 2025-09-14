@@ -40,10 +40,11 @@ class ReplayDecoderT(nn.Module):
             nn.ReLU(),
             nn.Linear(in_features=embed_dim // 2, out_features=2),
         )
-
-        self.proj_tgt = nn.Linear(
-            in_features=embed_dim + latent_dim, out_features=embed_dim
-        )
+        
+        # project latent (B, latent_dim) -> (B, embed_dim)
+        self.latent_proj = nn.Linear(in_features=latent_dim, out_features=embed_dim)
+        # force decoder to not bypass latent igs
+        self.mem_dropout = nn.Dropout(p=0.1)
 
         self.decoder_layer = nn.TransformerDecoderLayer(
             d_model=embed_dim,
@@ -63,15 +64,16 @@ class ReplayDecoderT(nn.Module):
         # latent_code = (batch_size, latent_dim)
 
         # Expand latent code to sequence length
-        # (batch_size, seq_len, latent_dim)
-        # TODO think on this choice, why use diff latent vector for each chunk??
+        # (B, T, latent_dim)
         latent_expanded = latent_code.unsqueeze(1).expand(-1, seq_len, -1)
 
-        x = torch.cat([map_embeddings + self.pos_dec.unsqueeze(0), latent_expanded], dim=-1)
-        # project back to embed_dim
-        x = self.proj_tgt(x)
+        # latent only target tokens with positional encodings
+        # (B, T, embed_dim)
+        tgt = self.latent_proj(latent_expanded) + self.pos_dec.unsqueeze(0)
 
-        decoded = self.decoder(tgt=x, memory=map_embeddings)
+        memory = self.mem_dropout(map_embeddings)
+
+        decoded = self.decoder(tgt=tgt, memory=memory)
 
         pos_out = self.pos_head(decoded)
 

@@ -26,6 +26,8 @@ class OsuReplayVAE(OsuModel):
         frame_window=(20, 70),
         noise_std=0.0,
         lambda_spin=100.0,
+        bi_enc: bool = False,
+        bi_dec: bool = False,
         compile: bool = True
     ):
         self.latent_dim = latent_dim
@@ -33,6 +35,8 @@ class OsuReplayVAE(OsuModel):
         self.future_frames = frame_window[1]
         self.noise_std = noise_std
         self.lambda_spin = lambda_spin
+        self.bi_enc = bi_enc
+        self.bi_dec = bi_dec
         self.annealer = annealer or Annealer(
             total_steps=10, range=(0, 0.3), cyclical=True, stay_max_steps=5
         )
@@ -55,12 +59,14 @@ class OsuReplayVAE(OsuModel):
             noise_std=self.noise_std,
             past_frames=self.past_frames,
             future_frames=self.future_frames,
+            bidirectional=self.bi_enc,
         )
         self.decoder = ReplayDecoder(
             self.input_size,
             latent_dim=self.latent_dim,
             past_frames=self.past_frames,
             future_frames=self.future_frames,
+            bidirectional=self.bi_dec,
         )
 
     def _initialize_optimizers(self):
@@ -136,7 +142,9 @@ class OsuReplayVAE(OsuModel):
         epoch_recon_loss = 0
         epoch_kl_loss = 0
         epoch_spinner_loss = 0
+        epoch_kl_weighted_loss = 0
 
+        beta = self.annealer.current()
         for i, (batch_x, batch_y_pos) in enumerate(
             tqdm.tqdm(
                 self.train_loader,
@@ -145,7 +153,6 @@ class OsuReplayVAE(OsuModel):
                 desc=f"Epoch {epoch + 1}/{total_epochs} (Beta: {self.annealer.current()})",
             )
         ):
-            self._set_custom_train_status(f"Batch {i}/{len(self.train_loader)} (Beta: {self.annealer.current()})")
             batch_x = batch_x.to(self.device)             # (B, T, features)
             batch_y_pos = batch_y_pos.to(self.device)     # (B, T, pos)
 
@@ -171,6 +178,13 @@ class OsuReplayVAE(OsuModel):
             epoch_recon_loss += recon_loss.item()
             epoch_kl_loss += kl_loss.item()
             epoch_spinner_loss += spin_loss.item()
+            epoch_kl_weighted_loss += (beta * kl_loss.item())
+
+            mu_m = mu.mean().item(); mu_s = mu.std().item()
+            lv_m = logvar.mean().item(); lv_s = logvar.std().item()
+            self._set_custom_train_status(
+                f"Batch {i}/{len(self.train_loader)} | mu:{mu_m:.4f}/{mu_s:.4f} lv:{lv_m:.4f}/{lv_s:.4f} KL:{kl_loss.item():.4f} bKL:{(beta*kl_loss.item()):.4f} β:{beta:.3f}"
+            )
 
         # Calculate average losses
         avg_total_loss = epoch_total_loss / len(self.train_loader)
@@ -185,6 +199,7 @@ class OsuReplayVAE(OsuModel):
             "total_loss": avg_total_loss,
             "recon_loss": avg_recon_loss,
             "kl_loss": avg_kl_loss,
+            "kl_weighted": avg_kl_weighted_loss,
             "spinner_loss": avg_spinner_loss,
         }
 
@@ -207,13 +222,15 @@ class OsuReplayVAE(OsuModel):
 
     # recon + kl term + spinner term
     def loss_function(self, reconstructed, original, mu, logvar, beatmap_features):
-        recon_loss = F.mse_loss(reconstructed, original, reduction="sum")
-        recon_loss /= original.shape[0]
+        # (B, T, 2) vs (B, T, 2) — average over all elements for stable magnitudes
+        recon_loss = F.mse_loss(reconstructed, original, reduction="mean")
 
-        kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-        kld /= original.shape[0]
+        # KL per-sample (sum over latent dims), then mean over batch
+        # mu/logvar: (B, latent_dim)
+        kld_per = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)  # (B)
+        kld = kld_per.mean()
 
-        # Calculate spinner loss
+        # Calculate spinner loss (scalar), weighted
         spin_loss = spinner_loss(original, reconstructed, beatmap_features) * self.lambda_spin
         
         total_loss = recon_loss + self.annealer(kld) + spin_loss
@@ -229,6 +246,8 @@ class OsuReplayVAE(OsuModel):
             "past_frames": self.past_frames,
             "future_frames": self.future_frames,
             "lambda_spin": self.lambda_spin,
+            "bi_enc": self.bi_enc,
+            "bi_dec": self.bi_dec,
         }
 
     def _load_state_dict(self, checkpoint):
@@ -247,6 +266,8 @@ class OsuReplayVAE(OsuModel):
             "frame_window": (checkpoint["past_frames"], checkpoint["future_frames"]),
             "latent_dim": checkpoint["latent_dim"],
             "lambda_spin": checkpoint.get("lambda_spin", 0.1),  # default to 0.1 for backwards compatibility
+            "bi_enc": checkpoint.get("bi_enc", False),
+            "bi_dec": checkpoint.get("bi_dec", False),
         }
 
         instance = cls(device=device, **kwargs, **vae_args)

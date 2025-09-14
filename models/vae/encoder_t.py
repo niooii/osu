@@ -29,6 +29,8 @@ class ReplayEncoderT(nn.Module):
 
         # project input features (9 or so -> embedding dim)
         self.proj_layer = nn.Linear(input_size, self.transformer_args.embed_dim)
+        # project positions (x, y) -> embedding dim (to condition q(z|x, y))
+        self.pos_proj = nn.Linear(2, self.transformer_args.embed_dim)
         # learned position encodings (TODO! switch to rotating?)
         # SEQ_LEN is chunk lenght eg probably 2048
         self.pos_enc = nn.Parameter(
@@ -83,23 +85,28 @@ class ReplayEncoderT(nn.Module):
 
         return self.encoder(xp)  # (B, T, embed_dim)
 
-    def forward(self, beatmap_features):
-        # gaussian noise during training
-        # if self.training and self.noise_std > 0:
-        # noise = torch.randn_like(positions) * self.noise_std
-        # positions = positions + noise
+    def forward(self, beatmap_features, positions):
+        # gaussian noise on positions during training
+        if self.training and self.noise_std > 0:
+            noise = torch.randn_like(positions) * self.noise_std
+            positions = positions + noise
 
-        # x = torch.cat([beatmap_features, positions], dim=-1)
+        # (B, T, embed_dim)
+        x_map = self.proj_layer(beatmap_features)
+        # (B, T, embed_dim)
+        x_pos = self.pos_proj(positions)
 
-        embeddings = self.map_embeddings(
-            beatmap_features=beatmap_features
-        )  # (B, T, embed_dim)
+        # add learned positional encodings
+        xp = x_map + x_pos + self.pos_enc.unsqueeze(0)  # (B, T, embed_dim)
+
+        # run it through the transformer layers (full context)
+        embeddings = self.encoder(xp)  # (B, T, embed_dim)
 
         # pool and compute mu and logvar for the latent code
         p_embed = embeddings.mean(dim=1)  # (B, embed_dim)
 
-        mu = self.mu_layer(p_embed)
-        logvar = self.logvar_layer(p_embed)
+        mu = self.mu_layer(p_embed)       # (B, latent_dim)
+        logvar = self.logvar_layer(p_embed)  # (B, latent_dim)
 
         return embeddings, mu, logvar
 
