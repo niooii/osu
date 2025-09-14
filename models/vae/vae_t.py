@@ -189,7 +189,7 @@ class OsuReplayTVAE(OsuModel):
         print(f"{cls.__name__} loaded from {path}")
         return instance
 
-    def generate(self, beatmap_data, num_samples=1):
+    def generate(self, beatmap_data):
         self._set_eval_mode()
 
         with torch.no_grad():

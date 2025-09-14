@@ -11,6 +11,7 @@ import tqdm.auto as tqdm
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, TensorDataset
 
+from models.loss import avg_spinner_speed
 import osu.dataset as dataset
 from osu.rulesets.core import REPLAY_SAMPLING_RATE
 
@@ -285,6 +286,7 @@ class OsuModel(ABC):
         
         plt.tight_layout()
 
+        # print avg mae and mse between generated samples
         if samples > 1:
             def mae(p1, p2):
                 return np.mean(np.abs(p1 - p2))
@@ -295,10 +297,22 @@ class OsuModel(ABC):
             avg_mae = np.average([mae(fake_data_list[i], fake_data_list[i+1]) for i in range(samples-1)])
             avg_mse = np.average([mse(fake_data_list[i], fake_data_list[i+1]) for i in range(samples-1)])
 
-            print(f"MAE: {avg_mae}")
-            print(f"MSE: {avg_mse}")
+            print(f"MAE: {avg_mae:.5f}")
+            print(f"MSE: {avg_mse:.5f}")
         else:
             print(f"MAE and MSE not available for sample size of {samples}")
+
+        # print average spinner speed if applicable
+        # TODO! should just generate a bunch of fake spinner frames and run the generation for those
+        # not just say 0
+        from models.loss import avg_spinner_speed
+
+        (_, fmean, _) = avg_spinner_speed(beatmap_data, fake_data_list[0])
+        print(f"Fake Spinner Velocity: {fmean:.5f}")
+
+        (_, rmean, _) = avg_spinner_speed(beatmap_data, real_data)
+        print(f"Real Spinner Velocity: {rmean:.5f}")
+
 
 
     # randomly selects a chunk in the loaded data, then generates play data for it,

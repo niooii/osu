@@ -11,6 +11,7 @@ import osu.dataset as dataset
 
 from ..annealer import Annealer
 from ..base import OsuModel
+from ..loss import spinner_loss
 from .decoder import ReplayDecoder
 from .encoder import ReplayEncoder
 
@@ -24,12 +25,14 @@ class OsuReplayVAE(OsuModel):
         latent_dim=48,
         frame_window=(20, 70),
         noise_std=0.0,
+        lambda_spin=100.0,
         compile: bool = True
     ):
         self.latent_dim = latent_dim
         self.past_frames = frame_window[0]
         self.future_frames = frame_window[1]
         self.noise_std = noise_std
+        self.lambda_spin = lambda_spin
         self.annealer = annealer or Annealer(
             total_steps=10, range=(0, 0.3), cyclical=True, stay_max_steps=5
         )
@@ -132,6 +135,7 @@ class OsuReplayVAE(OsuModel):
         epoch_total_loss = 0
         epoch_recon_loss = 0
         epoch_kl_loss = 0
+        epoch_spinner_loss = 0
 
         for i, (batch_x, batch_y_pos) in enumerate(
             tqdm.tqdm(
@@ -151,8 +155,8 @@ class OsuReplayVAE(OsuModel):
             reconstructed, mu, logvar = self.forward(batch_x, batch_y_pos)
 
             # Compute loss
-            total_loss, recon_loss, kl_loss = self.loss_function(
-                reconstructed, batch_y_pos, mu, logvar
+            total_loss, recon_loss, kl_loss, spin_loss = self.loss_function(
+                reconstructed, batch_y_pos, mu, logvar, batch_x
             )
 
             # Backward pass
@@ -166,11 +170,13 @@ class OsuReplayVAE(OsuModel):
             epoch_total_loss += total_loss.item()
             epoch_recon_loss += recon_loss.item()
             epoch_kl_loss += kl_loss.item()
+            epoch_spinner_loss += spin_loss.item()
 
         # Calculate average losses
         avg_total_loss = epoch_total_loss / len(self.train_loader)
         avg_recon_loss = epoch_recon_loss / len(self.train_loader)
         avg_kl_loss = epoch_kl_loss / len(self.train_loader)
+        avg_spinner_loss = epoch_spinner_loss / len(self.train_loader)
 
         # Step the annealer
         self.annealer.step()
@@ -179,6 +185,7 @@ class OsuReplayVAE(OsuModel):
             "total_loss": avg_total_loss,
             "recon_loss": avg_recon_loss,
             "kl_loss": avg_kl_loss,
+            "spinner_loss": avg_spinner_loss,
         }
 
     # allow backpropogatino through sampling
@@ -198,17 +205,20 @@ class OsuReplayVAE(OsuModel):
 
         return reconstructed, mu, logvar
 
-    # recon + kl term
-    def loss_function(self, reconstructed, original, mu, logvar):
+    # recon + kl term + spinner term
+    def loss_function(self, reconstructed, original, mu, logvar, beatmap_features):
         recon_loss = F.mse_loss(reconstructed, original, reduction="sum")
         recon_loss /= original.shape[0]
 
         kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
         kld /= original.shape[0]
 
-        total_loss = recon_loss + self.annealer(kld)
+        # Calculate spinner loss
+        spin_loss = spinner_loss(original, reconstructed, beatmap_features) * self.lambda_spin
+        
+        total_loss = recon_loss + self.annealer(kld) + spin_loss
 
-        return total_loss, recon_loss, kld
+        return total_loss, recon_loss, kld, spin_loss
 
     def _get_state_dict(self):
         return {
@@ -218,6 +228,7 @@ class OsuReplayVAE(OsuModel):
             "input_size": self.input_size,
             "past_frames": self.past_frames,
             "future_frames": self.future_frames,
+            "lambda_spin": self.lambda_spin,
         }
 
     def _load_state_dict(self, checkpoint):
@@ -235,6 +246,7 @@ class OsuReplayVAE(OsuModel):
         vae_args = {
             "frame_window": (checkpoint["past_frames"], checkpoint["future_frames"]),
             "latent_dim": checkpoint["latent_dim"],
+            "lambda_spin": checkpoint.get("lambda_spin", 0.1),  # default to 0.1 for backwards compatibility
         }
 
         instance = cls(device=device, **kwargs, **vae_args)

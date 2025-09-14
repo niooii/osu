@@ -73,13 +73,14 @@ class ReplayEncoderT(nn.Module):
 
         # run it through the transformer layers
         # the mask gives a sliding window of context, allowing future frames to be attended to
-        mask = self.local_mask(
-            SEQ_LEN,
-            past_frames=self.past_frames,
-            future_frames=self.future_frames,
-        )
+        # TODO nvm fuck it it gets full context
+        # mask = self.local_mask(
+        #     SEQ_LEN,
+        #     past_frames=self.past_frames,
+        #     future_frames=self.future_frames,
+        # )
 
-        return self.encoder(xp, mask=mask)  # (B, T, embed_dim)
+        return self.encoder(xp)  # (B, T, embed_dim)
 
     def forward(self, beatmap_features):
         # gaussian noise during training

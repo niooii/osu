@@ -15,14 +15,14 @@ def mysql_to_csv(
     """Turn osu's monthly MySQL dumps into a csv file.
     
     Args:
-        csv_file: Path to CSV file containing score data
-        min_accuracy: Minimum accuracy threshold (0.0-1.0)
-        min_pp: Minimum PP threshold
-        min_beatmapset_id: Minimum beatmapset ID threshold
-        max_downloads: Maximum number of replays to download
-        score_type: Type of scores to download
-        only: Filter for specific score types
-        verbose: Enable verbose output
+        csv_file: path to CSV file containing score data
+        min_accuracy: minimum accuracy threshold (0.0-1.0)
+        min_pp: minimum PP threshold
+        min_beatmapset_id: minimum beatmapset ID threshold
+        max_downloads: maximum number of replays to download
+        score_type: type of scores to download
+        only: filter for specific score types
+        verbose: enable verbose output
     """
     pass
 
