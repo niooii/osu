@@ -191,6 +191,7 @@ class OsuReplayVAE(OsuModel):
         avg_recon_loss = epoch_recon_loss / len(self.train_loader)
         avg_kl_loss = epoch_kl_loss / len(self.train_loader)
         avg_spinner_loss = epoch_spinner_loss / len(self.train_loader)
+        avg_kl_weighted_loss = epoch_kl_weighted_loss / len(self.train_loader)
 
         # Step the annealer
         self.annealer.step()
