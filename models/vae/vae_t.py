@@ -26,6 +26,7 @@ class OsuReplayTVAE(OsuModel):
         latent_dim=64,
         transformer_args: TransformerArgs = None,
         noise_std=0.0, 
+        seq_len: int = dataset.SEQ_LEN,
         frame_window=(40, 90),
         compile: bool = True
     ):
@@ -34,6 +35,7 @@ class OsuReplayTVAE(OsuModel):
         self.past_frames = frame_window[0]
         self.future_frames = frame_window[1]
         self.noise_std = noise_std
+        self.seq_len = seq_len
         self.annealer = annealer or Annealer(
             total_steps=10, range=(0, 0.3), cyclical=True, stay_max_steps=5
         )
@@ -52,6 +54,7 @@ class OsuReplayTVAE(OsuModel):
             noise_std=self.noise_std,
             past_frames=self.past_frames,
             future_frames=self.future_frames,
+            seq_len=self.seq_len
         )
         self.decoder = ReplayDecoderT(
             latent_dim=self.latent_dim,
