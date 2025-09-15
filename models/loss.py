@@ -71,3 +71,38 @@ def spinner_loss(real_pos, fake_pos, map_features, feat_idx_is_spinner=4, eps=1e
     # print(f"{real_spinner_speed} - {fake_spinner_speed} = {velocity_deficit}");
     
     return velocity_deficit
+
+
+def spinner_mse_loss(real_pos, fake_pos, map_features, feat_idx_is_spinner=4, eps=1e-8):
+    """
+    MSE between real and fake positions for spinner frames only.
+    """
+    if not torch.is_tensor(real_pos):
+        real_pos = torch.as_tensor(real_pos, dtype=torch.float32)
+    if not torch.is_tensor(fake_pos):
+        fake_pos = torch.as_tensor(fake_pos, dtype=torch.float32)
+    if not torch.is_tensor(map_features):
+        map_features = torch.as_tensor(map_features, dtype=torch.float32)
+
+    device = real_pos.device
+    fake_pos = fake_pos.to(device)
+    map_features = map_features.to(device)
+
+    # mask over time steps where spinner is active
+    spinner_feat = map_features[..., feat_idx_is_spinner]
+    spinner_mask = (spinner_feat > 0.5).float()  # (B, T)
+
+    # squared error per coordinate
+    diff = real_pos - fake_pos                   # (B, T, 2)
+    se = diff.pow(2)                             # (B, T, 2)
+
+    # apply mask (broadcast across x/y)
+    masked_se = se * spinner_mask.unsqueeze(-1)  # (B, T, 2)
+
+    # total squared error over all spinner-aligned coordinates
+    numer = masked_se.sum()
+    # count of spinner-aligned coordinates
+    denom = (spinner_mask.sum() * real_pos.shape[-1]).clamp(min=1.0)
+
+    mse = numer / denom
+    return mse

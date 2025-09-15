@@ -19,16 +19,19 @@ class ReplayTransformer(nn.Module):
         transformer_args: TransformerArgs = None,
         noise_std=0.0, 
         past_frames=PAST_FRAMES, 
-        future_frames=FUTURE_FRAMES
+        future_frames=FUTURE_FRAMES,
+        seq_len: int = SEQ_LEN,
+        pred_keys: bool = False,
     ):
         super().__init__()
         
         self.transformer_args = transformer_args or TransformerArgs()
         self.past_frames = past_frames
         self.future_frames = future_frames
-        self.window_size = past_frames + 1 + future_frames  # +1 for current frame
         self.noise_std = noise_std
         self.input_size = input_size
+        self.seq_len = seq_len
+        self.pred_keys = pred_keys
         
         self._initialize_layers()
 
@@ -38,8 +41,8 @@ class ReplayTransformer(nn.Module):
         # project input features (9 or so -> embedding dim)
         self.proj_layer = nn.Linear(self.input_size, self.transformer_args.embed_dim)
         # learned position encodings (TODO! switch to rotating?)
-        # SEQ_LEN is chunk lenght eg probably 2048
-        self.pos_enc = nn.Parameter(torch.randn(SEQ_LEN, self.transformer_args.embed_dim))
+        # seq_len is chunk length (defaults to dataset SEQ_LEN)
+        self.pos_enc = nn.Parameter(torch.randn(self.seq_len, self.transformer_args.embed_dim))
 
         # consists of an attention layer followed by 2 linear layers: embed_dim -> ff_dim -> embed_dim
         self.encoder_layer = nn.TransformerEncoderLayer(
@@ -81,9 +84,10 @@ class ReplayTransformer(nn.Module):
         # run it through the transformer layers
         # the mask gives a sliding window of context, allowing future frames to be attended to
         mask = self.local_mask(
-            SEQ_LEN, 
-            past_frames=self.past_frames, 
-            future_frames=self.future_frames, 
+            self.seq_len,
+            # give full context to past, it chooses what to attend to igs
+            past_frames=self.seq_len,
+            future_frames=self.future_frames,
         )
 
         return self.encoder(xp, mask=mask)    # (B, T, embed_dim)
@@ -93,7 +97,6 @@ class ReplayTransformer(nn.Module):
         device = next(self.parameters()).device
         beatmap_features = beatmap_features.to(device)
         output = output.to(device)
-        
         # x = torch.cat([beatmap_features, positions], dim=-1)
         
         # (B, T, embed_dim)
@@ -109,20 +112,23 @@ class ReplayTransformer(nn.Module):
 
         # (B, T, embed_dim)
         play_embeddings = self.proj_output_layer(dec_in)
-
+ 
+        # causal masks (no limit on past)
         tgt_mask = self.local_mask(T=T_dec, past_frames=T_dec, future_frames=0)
-        mem_mask = self.cross_attn_mask(T_dec=T_dec, T_enc=SEQ_LEN, past_frames=120)
+        mem_mask = self.cross_attn_mask(T_dec=T_dec, T_enc=self.seq_len, past_frames=self.seq_len)
 
         # (B, T, embed_dim)
         dec_out = self.decoder(tgt=play_embeddings, tgt_mask=tgt_mask, memory=map_embeddings, memory_mask=mem_mask)
         
         # (B, T, 4)
         pos_dist = self.pos_head(dec_out)
-        # (B, T, 2)
-        # keys = self.key_head(dec_out)
-
-        # return tgt for computing loss
-        return pos_dist, tgt, #keys
+        # (B, T, 2) key logits (optional)
+        if self.pred_keys:
+            keys = self.key_head(dec_out)
+            return pos_dist, tgt, keys
+        else:
+            # return tgt for computing loss
+            return pos_dist, tgt
 
 
     # attention mask since full global bidirectional attention isn't necessary
@@ -159,6 +165,9 @@ class OsuReplayTransformer(OsuModel):
         noise_std=0.0, 
         past_frames=PAST_FRAMES, 
         future_frames=FUTURE_FRAMES,
+        pred_pos_direct: bool = False,
+        pred_keys: bool = False,
+        seq_len: int = SEQ_LEN,
         batch_size=64,
         device=None,
     ):
@@ -166,6 +175,9 @@ class OsuReplayTransformer(OsuModel):
         self.noise_std = noise_std
         self.past_frames = past_frames
         self.future_frames = future_frames
+        self.pred_pos_direct = pred_pos_direct
+        self.pred_keys = pred_keys
+        self.seq_len = seq_len
         
         super().__init__(batch_size=batch_size, device=device, compile=True) 
 
@@ -175,7 +187,9 @@ class OsuReplayTransformer(OsuModel):
             transformer_args=self.transformer_args,
             noise_std=self.noise_std,
             past_frames=self.past_frames,
-            future_frames=self.future_frames
+            future_frames=self.future_frames,
+            seq_len=self.seq_len,
+            pred_keys=self.pred_keys,
         )
 
     def _initialize_optimizers(self):
@@ -195,7 +209,7 @@ class OsuReplayTransformer(OsuModel):
 
     def _train_epoch(self, epoch: int, total_epochs: int) -> dict:
         epoch_pos_loss = 0
-        # epoch_keys_loss = 0
+        epoch_keys_loss = 0 if self.pred_keys else None
         
         num_batches = len(self.train_loader)
 
@@ -206,35 +220,41 @@ class OsuReplayTransformer(OsuModel):
             batch_y = batch_y.to(self.device)
             
             self.optimizer.zero_grad()
-            # pos_dist, tgt, keys = self.forward(beatmap_features=batch_x, output=batch_y)
-            pos_dist, tgt = self.forward(beatmap_features=batch_x, output=batch_y)
+            if self.pred_keys:
+                pos_dist, tgt, keys = self.forward(beatmap_features=batch_x, output=batch_y)
+            else:
+                pos_dist, tgt = self.forward(beatmap_features=batch_x, output=batch_y)
             
-            # (B, T, 2)
-            # the mean predictions (basically position pred)
+            # (B, T, 2) the mean predictions (direct prediction target or Gaussian mean)
             mu_xy = pos_dist[:, :, :2]
 
-            # (B, T, 2)
-            # the variance predictions
-            logvar_xy = pos_dist[:, :, 2:]
-            var_xy = torch.exp(logvar_xy)
-            var_xy = torch.clamp(var_xy, min=1e-6)
-
-            pos_loss = F.gaussian_nll_loss(input=mu_xy, target=tgt[:, :, :2], var=var_xy, full=True, reduction="mean")
-            # key_loss = F.binary_cross_entropy_with_logits(input=keys, target=tgt[:, :, 2:], reduction="mean")
-
-            total_loss = pos_loss # + key_loss
+            if self.pred_pos_direct:
+                # Simple MSE on positions only
+                pos_loss = F.mse_loss(input=mu_xy, target=tgt[:, :, :2], reduction="mean")
+            else:
+                # Gaussian NLL with learned variance
+                logvar_xy = pos_dist[:, :, 2:]
+                var_xy = torch.exp(logvar_xy)
+                var_xy = torch.clamp(var_xy, min=1e-6)
+                pos_loss = F.gaussian_nll_loss(input=mu_xy, target=tgt[:, :, :2], var=var_xy, full=True, reduction="mean")
+            if self.pred_keys:
+                key_loss = F.binary_cross_entropy_with_logits(input=keys, target=tgt[:, :, 2:], reduction="mean")
+                total_loss = pos_loss + key_loss
+            else:
+                total_loss = pos_loss
             total_loss.backward()
 
             torch.nn.utils.clip_grad_norm_(self.transformer.parameters(), max_norm=1.0)
             self.optimizer.step()
 
             epoch_pos_loss += pos_loss.item()
-            # epoch_keys_loss += key_loss.item()
+            if self.pred_keys:
+                epoch_keys_loss += key_loss.item()
             
-        return {
-            "pos_loss": epoch_pos_loss / num_batches,
-            # "key_loss": epoch_keys_loss / num_batches
-        }
+        result = {"pos_loss": epoch_pos_loss / num_batches}
+        if self.pred_keys and epoch_keys_loss is not None:
+            result["key_loss"] = epoch_keys_loss / num_batches
+        return result
 
     def _get_state_dict(self):
         return {
@@ -243,6 +263,9 @@ class OsuReplayTransformer(OsuModel):
             'noise_std': self.noise_std,
             'past_frames': self.past_frames,
             'future_frames': self.future_frames,
+            'pred_pos_direct': self.pred_pos_direct,
+            'pred_keys': self.pred_keys,
+            'seq_len': self.seq_len,
             'input_size': self.input_size
         }
     
@@ -262,7 +285,10 @@ class OsuReplayTransformer(OsuModel):
             'transformer_args': transformer_args,
             'noise_std': checkpoint.get('noise_std', 0.0),
             'past_frames': checkpoint.get('past_frames', PAST_FRAMES),
-            'future_frames': checkpoint.get('future_frames', FUTURE_FRAMES)
+            'future_frames': checkpoint.get('future_frames', FUTURE_FRAMES),
+            'pred_pos_direct': checkpoint.get('pred_pos_direct', False),
+            'pred_keys': checkpoint.get('pred_keys', False),
+            'seq_len': checkpoint.get('seq_len', SEQ_LEN),
         }
         
         instance = cls(device=device, **kwargs, **model_args)
@@ -285,21 +311,30 @@ class OsuReplayTransformer(OsuModel):
             for t in range(1, seq_len):
                 print(f"pred {t}")
                 # this is really bad and also not continuous between chunks..,
-                # pos_dist, keys = self.transformer(map_tensor, generated)
-
-                pos_dist, tgt = self.transformer(map_tensor, generated)
+                if self.pred_keys:
+                    pos_dist, tgt, keys = self.transformer(map_tensor, generated)
+                else:
+                    pos_dist, tgt = self.transformer(map_tensor, generated)
 
                 mu_xy = pos_dist[:, t-1, :2]
-                logvar = pos_dist[:, t - 1, 2:]  # (B,2)
-                sigma = torch.exp(0.5 * logvar).clamp(min=1e-6)  # std
-                sigma = sigma * float(temperature)
-                pos_sample = torch.normal(mu_xy, sigma)
+                if self.pred_pos_direct:
+                    pos_sample = mu_xy
+                else:
+                    logvar = pos_dist[:, t - 1, 2:]  # (B,2)
+                    sigma = torch.exp(0.5 * logvar).clamp(min=1e-6)  # std
+                    sigma = sigma * float(temperature)
+                    pos_sample = torch.normal(mu_xy, sigma)
 
-                # key_probs = torch.sigmoid(keys[:, t-1, :] / temperature)
-                # key_sample = torch.bernoulli(key_probs)
+                if self.pred_keys:
+                    if temperature > 0:
+                        key_probs = torch.sigmoid(keys[:, t-1, :] / temperature)
+                        key_sample = torch.bernoulli(key_probs)
+                    else:
+                        key_sample = (keys[:, t-1, :] > 0).float()
 
                 generated[:, t, :2] = pos_sample
-                # generated[:, t, 2:] = key_sample
+                if self.pred_keys:
+                    generated[:, t, 2:] = key_sample
 
         self._set_train_mode()
         return generated.cpu().numpy()

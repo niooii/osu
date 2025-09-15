@@ -11,7 +11,7 @@ import osu.dataset as dataset
 
 from ..annealer import Annealer
 from ..base import OsuModel
-from ..loss import spinner_loss
+from ..loss import spinner_loss, spinner_mse_loss
 from .decoder import ReplayDecoder
 from .encoder import ReplayEncoder
 
@@ -28,6 +28,7 @@ class OsuReplayVAE(OsuModel):
         lambda_spin=100.0,
         bi_enc: bool = False,
         bi_dec: bool = False,
+        use_windowing: bool = True,
         compile: bool = True
     ):
         self.latent_dim = latent_dim
@@ -37,6 +38,7 @@ class OsuReplayVAE(OsuModel):
         self.lambda_spin = lambda_spin
         self.bi_enc = bi_enc
         self.bi_dec = bi_dec
+        self.use_windowing = use_windowing
         self.annealer = annealer or Annealer(
             total_steps=10, range=(0, 0.3), cyclical=True, stay_max_steps=5
         )
@@ -60,6 +62,7 @@ class OsuReplayVAE(OsuModel):
             past_frames=self.past_frames,
             future_frames=self.future_frames,
             bidirectional=self.bi_enc,
+            use_windowing=self.use_windowing,
         )
         self.decoder = ReplayDecoder(
             self.input_size,
@@ -67,6 +70,7 @@ class OsuReplayVAE(OsuModel):
             past_frames=self.past_frames,
             future_frames=self.future_frames,
             bidirectional=self.bi_dec,
+            use_windowing=self.use_windowing,
         )
 
     def _initialize_optimizers(self):
@@ -211,7 +215,8 @@ class OsuReplayVAE(OsuModel):
         return mu + eps * std
 
     def forward(self, beatmap_features, positions):
-        windowed_features = self.create_windowed_features(beatmap_features)
+        # either use explicit windowing or raw features
+        windowed_features = self.create_windowed_features(beatmap_features) if self.use_windowing else beatmap_features
 
         mu, logvar = self.encoder(windowed_features, positions)
 
@@ -232,7 +237,7 @@ class OsuReplayVAE(OsuModel):
         kld = kld_per.mean()
 
         # Calculate spinner loss (scalar), weighted
-        spin_loss = spinner_loss(original, reconstructed, beatmap_features) * self.lambda_spin
+        spin_loss = spinner_mse_loss(original, reconstructed, beatmap_features) * self.lambda_spin
         
         total_loss = recon_loss + self.annealer(kld) + spin_loss
 
@@ -249,6 +254,7 @@ class OsuReplayVAE(OsuModel):
             "lambda_spin": self.lambda_spin,
             "bi_enc": self.bi_enc,
             "bi_dec": self.bi_dec,
+            "use_windowing": self.use_windowing,
         }
 
     def _load_state_dict(self, checkpoint):
@@ -269,6 +275,7 @@ class OsuReplayVAE(OsuModel):
             "lambda_spin": checkpoint.get("lambda_spin", 0.1),  # default to 0.1 for backwards compatibility
             "bi_enc": checkpoint.get("bi_enc", False),
             "bi_dec": checkpoint.get("bi_dec", False),
+            "use_windowing": checkpoint.get("use_windowing", True),
         }
 
         instance = cls(device=device, **kwargs, **vae_args)
@@ -285,14 +292,14 @@ class OsuReplayVAE(OsuModel):
         with torch.no_grad():
             beatmap_tensor = torch.FloatTensor(beatmap_data).to(self.device)
 
-            # create windowed features for generation
-            windowed_features = self.create_windowed_features(beatmap_tensor)
+        # use windowing if enabled
+        windowed_features = self.create_windowed_features(beatmap_tensor) if self.use_windowing else beatmap_tensor
 
-            batch_size = beatmap_tensor.shape[0]
+        batch_size = beatmap_tensor.shape[0]
 
-            # sample from prior distribution
-            z = torch.randn(batch_size, self.latent_dim, device=self.device)
+        # sample from prior distribution
+        z = torch.randn(batch_size, self.latent_dim, device=self.device)
 
-            pos = self.decoder(windowed_features, z)
+        pos = self.decoder(windowed_features, z)
 
-        return np.pad(pos.cpu().numpy(), ((0, 0), (0, 0), (0, 2)), mode='constant', constant_values=0)
+        return np.pad(pos.cpu().detach().numpy(), ((0, 0), (0, 0), (0, 2)), mode='constant', constant_values=0)

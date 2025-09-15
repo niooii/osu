@@ -10,15 +10,18 @@ PAST_FRAMES = 20
 class ReplayDecoder(nn.Module):
     """Decode latent code + beatmap features to cursor positions"""
 
-    def __init__(self, input_size, latent_dim=32, past_frames=PAST_FRAMES, future_frames=FUTURE_FRAMES, bidirectional: bool = False):
+    def __init__(self, input_size, latent_dim=32, past_frames=PAST_FRAMES, future_frames=FUTURE_FRAMES, bidirectional: bool = False, use_windowing: bool = True):
         super().__init__()
         self.past_frames = past_frames
         self.future_frames = future_frames
         self.window_size = past_frames + 1 + future_frames
         self.bidirectional = bidirectional
+        self.use_windowing = use_windowing
 
         # Windowed beatmap features + latent code
-        combined_size = (input_size * self.window_size) + latent_dim
+        # if use_windowing=False, we feed raw map features per frame
+        # combined_size = (input_size * window_size) + latent_dim  OR  (input_size) + latent_dim
+        combined_size = (input_size * self.window_size) + latent_dim if self.use_windowing else (input_size + latent_dim)
 
         # Symmetric layers to encoder (not really almost)
         self.lstm = nn.LSTM(

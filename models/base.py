@@ -344,7 +344,7 @@ class OsuModel(ABC):
         torch.save(state_dict, save_path)
         torch.save(state_dict, f"{save_dir}/{model_name_lower}_most_recent.pt")
 
-        verbose and print(f"{self._get_model_name()} model saved to {save_dir}.pt")
+        verbose and print(f"{self._get_model_name()} model saved to {save_path}.pt")
 
         return save_path
 
