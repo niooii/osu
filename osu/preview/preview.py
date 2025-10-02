@@ -183,20 +183,37 @@ def preview_replay_raw(ia_replay, beatmap_path: str, mods=None, audio_file=None,
             x *= SCREEN_WIDTH
             y *= SCREEN_HEIGHT
             pygame.draw.circle(screen, (0, 255, 0), (int(x), int(y)), 8)
-            
+
             if k1 and not prev_k1:
                 print("k1 pressed")
             elif not k1 and prev_k1:
                 print("k1 released")
-            
+
             if k2 and not prev_k2:
                 print("k2 pressed")
             elif not k2 and prev_k2:
                 print("k2 released")
-            
+
             # Update previous key states
             prev_k1 = k1
             prev_k2 = k2
+
+            # Draw key indicator boxes on the right side
+            box_width = 40
+            box_height = 30
+            box_x = SCREEN_WIDTH - box_width - 10
+
+            # k1 box (top)
+            k1_y = SCREEN_HEIGHT // 2 - box_height - 5
+            k1_color = (255, 255, 0) if k1 else (128, 128, 128)  # Yellow if pressed, grey if not
+            pygame.draw.rect(screen, k1_color, (box_x, k1_y, box_width, box_height))
+            pygame.draw.rect(screen, (255, 255, 255), (box_x, k1_y, box_width, box_height), 2)  # White border
+
+            # k2 box (bottom)
+            k2_y = SCREEN_HEIGHT // 2 + 5
+            k2_color = (255, 255, 0) if k2 else (128, 128, 128)  # Yellow if pressed, grey if not
+            pygame.draw.rect(screen, k2_color, (box_x, k2_y, box_width, box_height))
+            pygame.draw.rect(screen, (255, 255, 255), (box_x, k2_y, box_width, box_height), 2)  # White border
 
             if dragging_progress:
                 trail = []
@@ -400,7 +417,7 @@ def preview_training_data(xs, ys, sample_rate: int = REPLAY_SAMPLING_RATE):
                 x *= SCREEN_WIDTH
                 y *= SCREEN_HEIGHT
                 pygame.draw.circle(screen, (255, 255, 0), (int(x), int(y)), 8)  # Yellow cursor
-                
+
                 # Detect key press/release events
                 if k1 and not prev_k1:
                     print("k1 pressed")
@@ -415,6 +432,23 @@ def preview_training_data(xs, ys, sample_rate: int = REPLAY_SAMPLING_RATE):
                 # Update previous key states
                 prev_k1 = k1
                 prev_k2 = k2
+
+                # Draw key indicator boxes on the right side
+                box_width = 40
+                box_height = 30
+                box_x = SCREEN_WIDTH - box_width - 10
+
+                # k1 box (top)
+                k1_y = SCREEN_HEIGHT // 2 - box_height - 5
+                k1_color = (255, 255, 0) if k1 else (128, 128, 128)  # Yellow if pressed, grey if not
+                pygame.draw.rect(screen, k1_color, (box_x, k1_y, box_width, box_height))
+                pygame.draw.rect(screen, (255, 255, 255), (box_x, k1_y, box_width, box_height), 2)  # White border
+
+                # k2 box (bottom)
+                k2_y = SCREEN_HEIGHT // 2 + 5
+                k2_color = (255, 255, 0) if k2 else (128, 128, 128)  # Yellow if pressed, grey if not
+                pygame.draw.rect(screen, k2_color, (box_x, k2_y, box_width, box_height))
+                pygame.draw.rect(screen, (255, 255, 255), (box_x, k2_y, box_width, box_height), 2)  # White border
 
                 if dragging_progress:
                     trail = []
