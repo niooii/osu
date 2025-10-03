@@ -8,7 +8,7 @@ class Annealer:
     After each call, the step() function should be called to update the current epoch.
     """
 
-    def __init__(self, total_steps, shape='linear', range=(0.0, 1.0), cyclical=False, stay_max_steps=0, disable=False):
+    def __init__(self, total_steps, shape='linear', range=(0.0, 1.0), cyclical=False, stay_max_steps=0, start_offset=0, disable=False):
         """
         Parameters:
             total_steps (int): Number of epochs to reach full annealing weight.
@@ -16,6 +16,7 @@ class Annealer:
             range (tuple): Tuple of (min_val, max_val) defining the annealing range. Default is (0.0, 1.0).
             cyclical (bool): Whether to repeat the annealing cycle after total_steps is reached.
             stay_max_steps (int): If cyclical, number of steps to stay at maximum value before cycling. Default is 0.
+            start_offset (int): Number of steps to delay annealing start. Returns start value during offset. Default is 0.
             disable (bool): If true, the __call__ method returns unchanged input (no annealing).
         """
 
@@ -46,6 +47,10 @@ class Annealer:
             raise ValueError("Argument stay_max_steps must be a non-negative integer")
         self.stay_max_steps = stay_max_steps
 
+        if type(start_offset) is not int or start_offset < 0:
+            raise ValueError("Argument start_offset must be a non-negative integer")
+        self.start_offset = start_offset
+
         if type(disable) is not bool:
             raise ValueError("Argument disable must be a boolean.")
         self.disable = disable
@@ -64,10 +69,11 @@ class Annealer:
 
     def step(self):
         total_cycle_steps = self.total_steps + self.stay_max_steps
-        if self.current_step < total_cycle_steps:
+        effective_step = self.current_step - self.start_offset
+        if effective_step < total_cycle_steps:
             self.current_step += 1
-        if self.cyclical and self.current_step >= total_cycle_steps:
-            self.current_step = 0
+        if self.cyclical and effective_step >= total_cycle_steps:
+            self.current_step = self.start_offset
         return
 
     def set_cyclical(self, value):
@@ -104,21 +110,27 @@ class Annealer:
 
 
     def _slope(self):
+        # If we're in the offset period, return start value
+        if self.current_step < self.start_offset:
+            return self.range[0]
+
+        effective_step = self.current_step - self.start_offset
+
         # If we're in the stay-at-max period, return max value
-        if self.current_step >= self.total_steps:
+        if effective_step >= self.total_steps:
             y = 1.0
         else:
             # Normal annealing calculation
             if self.shape == 'linear':
-                y = (self.current_step / self.total_steps)
+                y = (effective_step / self.total_steps)
             elif self.shape == 'cosine':
-                y = (math.cos(math.pi * (self.current_step / self.total_steps - 1)) + 1) / 2
+                y = (math.cos(math.pi * (effective_step / self.total_steps - 1)) + 1) / 2
             elif self.shape == 'logistic':
-                exponent = ((self.total_steps / 2) - self.current_step)
+                exponent = ((self.total_steps / 2) - effective_step)
                 y = 1 / (1 + math.exp(exponent))
             else:
                 y = 1.0
-        
+
         y = self._scale_to_range(y)
         return y
 

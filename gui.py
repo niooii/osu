@@ -102,6 +102,7 @@ class OsuAIGUI:
         self.rnn: Optional[OsuReplayRNN] = None
         self.vae: Optional[OsuReplayVAE] = None
         self.key_model: Optional[OsuKeyModel] = None
+        self.loaded_play_data: Optional[np.ndarray] = None
         self.use_vae = True
         self.active = True
         self.offset = 15
@@ -199,6 +200,14 @@ class OsuAIGUI:
                                    tag="generate_play")
                     dpg.add_button(label="Reset",
                                    callback=None,
+                                   width=140, height=30)
+
+                with dpg.group(horizontal=True):
+                    dpg.add_button(label="Load Replay",
+                                   callback=self.load_replay_data,
+                                   width=140, height=30)
+                    dpg.add_button(label="Generate Keys",
+                                   callback=self.generate_keys,
                                    width=140, height=30)
 
                 def set_active():
@@ -315,6 +324,78 @@ class OsuAIGUI:
                 dpg.set_value("key_weights", f"Invalid")
                 dpg.bind_item_theme("key_weights", "red_theme")
                 print(f'Error loading key weights: {e}')
+
+    def load_replay_data(self):
+        path = fd.askopenfilename(initialdir=".", filetypes=[("NumPy files", "*.npy")])
+        if path is not None and os.path.exists(path):
+            try:
+                loaded_data = np.load(path)
+
+                # Pad if needed (if data is only [x, y])
+                if loaded_data.shape[-1] == 2:
+                    padded = np.pad(loaded_data, ((0, 0), (0, 2)), mode='constant', constant_values=0)
+                    self.loaded_play_data = padded
+                else:
+                    self.loaded_play_data = loaded_data
+
+                # Store in cache if we have a map
+                if self.map is not None:
+                    cache_key = create_cache_key(self.map.md5, self.mods)
+                    self.play_frames_cache[cache_key] = self.loaded_play_data
+                    dpg.bind_item_theme("generate_play", "green_theme")
+
+                self.log_message(f'Loaded replay data from {os.path.basename(path)}')
+            except Exception as e:
+                self.log_message(f'Error loading replay data: {e}')
+                print(f'Error loading replay data: {e}')
+
+    def generate_keys(self):
+        if self.key_model is None:
+            self.log_message('No key model weights loaded')
+            return
+
+        if self.map is None:
+            self.log_message('No map selected')
+            return
+
+        cache_key = create_cache_key(self.map.md5, self.mods)
+
+        # Prepare beatmap data for key generation
+        if cache_key not in self.map_frames_cache:
+            data = dataset.input_data(self.map.beatmap)
+            data = np.reshape(data.values, (-1, dataset.SEQ_LEN, len(dataset.INPUT_FEATURES)))
+            data = torch.FloatTensor(data)
+            self.map_frames_cache[cache_key] = data
+
+        # Generate keys
+        key_data = self.key_model.generate(self.map_frames_cache[cache_key])
+        key_data = np.concatenate(key_data)
+
+        # Check if we have existing play data in cache
+        if cache_key in self.play_frames_cache:
+            play_data = self.play_frames_cache[cache_key].copy()
+        else:
+            # No position data, initialize with [0, 0, k1, k2]
+            play_data = np.zeros((key_data.shape[0], 4))
+            play_data[:, 2:] = key_data
+            self.play_frames_cache[cache_key] = play_data
+            self.log_message('Generated keys (initialized with zero positions)')
+            dpg.bind_item_theme("generate_play", "green_theme")
+            return
+
+        # Replace k1, k2 in existing data
+        if play_data.shape[-1] == 4:
+            play_data[:, 2:] = key_data
+        elif play_data.shape[-1] == 2:
+            # Pad with keys
+            play_data = np.concatenate([play_data, key_data], axis=-1)
+        else:
+            self.log_message(f'Unexpected play data shape: {play_data.shape}')
+            return
+
+        self.play_frames_cache[cache_key] = play_data
+        self.log_message('Generated and replaced keys')
+        dpg.bind_item_theme("generate_play", "green_theme")
 
     def log_message(self, message: str):
         """Add message to debug log"""

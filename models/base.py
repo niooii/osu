@@ -76,6 +76,27 @@ class OsuModel(ABC):
     ) -> np.ndarray:
         pass
 
+    # Generate output data for a map and save to a file
+    def generate_to(
+        self, beatmap_data: Union[np.ndarray, torch.Tensor], path: str, **kwargs
+    ):
+        output_data = self.generate(beatmap_data, **kwargs)
+
+        # Pad with [0, 0] if inner arrays are [x, y] (length 2)
+        # to make them [x, y, 0, 0] for playback
+        if output_data.shape[-1] == 2:
+            # concatenate along chunks dimension
+            flat_output = np.concatenate(output_data, axis=0)
+            # pad with zeros
+            padded = np.pad(flat_output, ((0, 0), (0, 2)), mode='constant', constant_values=0)
+            np.save(path, padded)
+        else:
+            # already has correct shape, just concatenate and save
+            flat_output = np.concatenate(output_data, axis=0)
+            np.save(path, flat_output)
+
+        print(f"Generated data saved to {path}.npy")
+
     # input_data and output_data are of shape (chunks, T, features), usually referred to around the codebase as
     # xs and ys when loaded
     def load_data(
