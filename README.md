@@ -17,37 +17,41 @@ This entire project is largely inspired by (and uses a lot of beatmap processing
 # Models
 This repo implements the following models, ranked from worst performing to best
 
-## LSTM-based RNN (Recurrent Neural Network)
-Performed very well in-game, but deterministic and very robotic, which isn't the goal. It turned out to be
+## Recurrent Neural Network (LSTM)
+Performed very well in-game, easy enough to train, but deterministic and very robotic, which isn't the goal. It turned out to be
 *way* too good at the game.  
 ![](media/ls4mod.gif)  
 <sub>The RNN playing Logical Stimulus, a known difficult map with all difficulty modifiers</sub>
 
-## GAN (Generative Adversarial Network)
-Ended up performing like the aforementioned RNN, due to mode collapse and the 
-discriminator defaulting to 0.  
+## Generative Adversarial network
+Ended up performing like the aforementioned RNN, due to mode collapse stuff :|
 
-## VAE (Variational Autoencoder)
+## Variational Autoencoder
 Performed very well in terms of the trajectory
 between notes, and in one rare case, learned to generate realistic spinner movement
-and idle movements. Cannot consistently learn spinner/idle patterns, and has a (known) tendency
-to average out movement patterns.  
+and idle movements. Cannot consistently learn spinner/idle patterns, and usually just
+averages out movement patterns.  
 ![](media/highscore-spinner.gif)  
 <sub>The VAE playing through a spinner. Many more examples [here](https://www.youtube.com/watch?v=lKOraHbxjHo&t=5s)</sub>
+
+## WGAN-GP
+Two variants were trained, one using convolutions and one using RNNs. RNN one performs a lot better, but takes a while to train due to cuDNN not supporting double backwards for the gradient penalty. 
+
+The TCN variant is probably not setup well, I didn't spend too long on it. 
+
+Results in this video:
+
+[![Here](https://img.youtube.com/vi/opwf4klPzVk/0.jpg)](https://www.youtube.com/watch?v=opwf4klPzVk)
 
 # Keypress models
 There are also models for generating keypresses, alongside the ones that
 generate cursor movement. They are separated for simplicity and ease of training. There's only
 one at the moment:
 
-## LSTM-based RNN
+## Recurrent Neural Network (LSTM)
 Works fine, but sometimes will tap twice for trickier sequences.  
 
-### WIP
-More models are still being implemented, including a WGAN with gradient penalty, and an adversarially
-trained VAE. 
-
-**Model weights will be made public soon, along with datasets.**  
+**Model weights will be made public soon, along with datasets if anyone is interested.**  
 
 # Replay playback (and running locally)
 The `gui.py` script functions as a utility GUI to generate and playback replays in-game.
