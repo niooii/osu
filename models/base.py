@@ -1,4 +1,5 @@
 import datetime
+import importlib
 import os
 from abc import ABC, abstractmethod
 from typing import List, Optional, Tuple, Union
@@ -141,6 +142,12 @@ class OsuModel(ABC):
 
         self._set_train_mode()
 
+        from torch.utils.tensorboard import SummaryWriter
+
+        model_name = self._get_model_name().lower()
+        timestamp = datetime.datetime.now().strftime("%m-%d_%H-%M-%S")
+        writer = SummaryWriter(f"runs/{model_name}_{timestamp}")
+
         loss_str = None
 
         self.train_iterator = tqdm.tqdm(range(epochs), total=epochs, position=0)
@@ -157,6 +164,8 @@ class OsuModel(ABC):
                     self.training_history[loss_name] = []
                 self.training_history[loss_name].append(loss_value)
 
+                writer.add_scalar(loss_name, loss_value, epoch)
+
             loss_str = ", ".join(
                 [f"{name.title()}: {value:.4f}" for name, value in epoch_losses.items()]
             )
@@ -165,7 +174,7 @@ class OsuModel(ABC):
                 # am i a bum bro
                 short_loss_str = "_".join(
                     [
-                        f"{name.title().lower().replace("_loss_", "").replace("_loss", "").replace("loss_", "").replace("loss", "").strip()}_{value:.4f}"
+                        f"{name.title().lower().replace('_loss_', '').replace('_loss', '').replace('loss_', '').replace('loss', '').strip()}_{value:.4f}"
                         for name, value in epoch_losses.items()
                     ]
                 )
@@ -173,6 +182,8 @@ class OsuModel(ABC):
                 self.save(
                     additional_str=short_loss_str, save_dir=save_dir, verbose=False
                 )
+
+        writer.close()
 
     # plots all the tracked losses
     def plot_losses(self):
@@ -354,16 +365,19 @@ class OsuModel(ABC):
         save_dir = save_dir.rstrip("/") if save_dir is not None else ".trained"
 
         timestamp = datetime.datetime.now().strftime("%m-%d_%H-%M-%S")
-        save_path = f"{save_dir}/{model_name_lower}_{timestamp}{("_" + additional_str) if additional_str is not None else ""}"
+        save_path = f"{save_dir}/{model_name_lower}_{timestamp}{('_' + additional_str) if additional_str is not None else ''}"
 
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
 
         state_dict = self._get_state_dict()
+        state_dict["__model_class__"] = self.__class__.__name__
+        state_dict["__model_module__"] = self.__class__.__module__
 
-        # save both timestamped and most_recent versions
+        # save timestamped, model-specific most_recent, and universal recent
         torch.save(state_dict, save_path)
         torch.save(state_dict, f"{save_dir}/{model_name_lower}_most_recent.pt")
+        torch.save(state_dict, f"{save_dir}/recent.pt")
 
         verbose and print(f"{self._get_model_name()} model saved to {save_path}.pt")
 
@@ -383,6 +397,25 @@ class OsuModel(ABC):
 
         print(f"{cls.__name__} loaded from {path}")
         return instance
+
+    @staticmethod
+    def auto_load(path: str, device: Optional[torch.device] = None, **kwargs):
+        """Load a model checkpoint without knowing the model class.
+        The class is resolved from metadata embedded in the checkpoint by save()."""
+        device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        checkpoint = torch.load(path, map_location=device)
+
+        class_name = checkpoint.get("__model_class__")
+        module_name = checkpoint.get("__model_module__")
+        if class_name is None or module_name is None:
+            raise ValueError(
+                "Checkpoint doesn't contain model class metadata. "
+                "Re-save the model or use the specific class's .load() method."
+            )
+
+        module = importlib.import_module(module_name)
+        cls = getattr(module, class_name)
+        return cls.load(path, device=device, **kwargs)
 
     # Helper functions for freezing parameters/entire models
 

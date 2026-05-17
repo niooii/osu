@@ -5,6 +5,7 @@ assets
 .env
 .checkpoints
 .datasets
+runs/
 *.pt
 all_scores.csv
 .venv*
