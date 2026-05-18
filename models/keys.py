@@ -30,15 +30,16 @@ class OsuKeyModel(OsuModel):
         self.key_model.train()
         epoch_train_loss = 0
 
-        for batch_x, batch_y in tqdm.tqdm(self.train_loader, desc=f'Epoch {epoch + 1}/{total_epochs} (Keys)'):
+        for batch_x, batch_y, batch_mask in tqdm.tqdm(self.train_loader, desc=f'Epoch {epoch + 1}/{total_epochs} (Keys)'):
             batch_x = batch_x.to(self.device)
             batch_y = batch_y.to(self.device)
+            batch_mask = batch_mask.to(self.device)
 
             self._process_keys(batch_y)
 
             self.key_optimizer.zero_grad()
             keys = self.key_model(batch_x)
-            keys_loss = self.key_criterion(keys, batch_y)
+            keys_loss = self.key_criterion(keys[batch_mask], batch_y[batch_mask])
             keys_loss.backward()
             torch.nn.utils.clip_grad_norm_(self.key_model.parameters(), max_norm=1.0)
             self.key_optimizer.step()
@@ -49,14 +50,15 @@ class OsuKeyModel(OsuModel):
         self.key_model.eval()
         epoch_test_loss = 0
         with torch.no_grad():
-            for batch_x, batch_y in self.test_loader:
+            for batch_x, batch_y, batch_mask in self.test_loader:
                 batch_x = batch_x.to(self.device)
                 batch_y = batch_y.to(self.device)
+                batch_mask = batch_mask.to(self.device)
 
                 self._process_keys(batch_y)
 
                 keys = self.key_model(batch_x)
-                keys_loss = self.key_criterion(keys, batch_y)
+                keys_loss = self.key_criterion(keys[batch_mask], batch_y[batch_mask])
                 epoch_test_loss += keys_loss.item()
 
         # Calculate average losses

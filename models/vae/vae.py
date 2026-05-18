@@ -149,7 +149,7 @@ class OsuReplayVAE(OsuModel):
         epoch_kl_weighted_loss = 0
 
         beta = self.annealer.current()
-        for i, (batch_x, batch_y_pos) in enumerate(
+        for i, (batch_x, batch_y_pos, batch_mask) in enumerate(
             tqdm.tqdm(
                 self.train_loader,
                 disable=True,
@@ -159,6 +159,7 @@ class OsuReplayVAE(OsuModel):
         ):
             batch_x = batch_x.to(self.device)             # (B, T, features)
             batch_y_pos = batch_y_pos.to(self.device)     # (B, T, pos)
+            batch_mask = batch_mask.to(self.device)
 
             self.optimizer.zero_grad()
 
@@ -167,7 +168,7 @@ class OsuReplayVAE(OsuModel):
 
             # Compute loss
             total_loss, recon_loss, kl_loss, spin_loss = self.loss_function(
-                reconstructed, batch_y_pos, mu, logvar, batch_x
+                reconstructed, batch_y_pos, mu, logvar, batch_x, batch_mask
             )
 
             # Backward pass
@@ -227,16 +228,16 @@ class OsuReplayVAE(OsuModel):
         return reconstructed, mu, logvar
 
     # recon + kl term + spinner term
-    def loss_function(self, reconstructed, original, mu, logvar, beatmap_features):
-        # (B, T, 2) vs (B, T, 2) — average over all elements for stable magnitudes
-        recon_loss = F.mse_loss(reconstructed, original, reduction="mean")
+    def loss_function(self, reconstructed, original, mu, logvar, beatmap_features, valid_mask):
+        # (B, T, 2) vs (B, T, 2) but only average over valid non padding frames
+        recon_loss = F.mse_loss(reconstructed[valid_mask], original[valid_mask], reduction="mean")
 
         # KL per-sample (sum over latent dims), then mean over batch
         # mu/logvar: (B, latent_dim)
         kld_per = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)  # (B)
         kld = kld_per.mean()
 
-        # Calculate spinner loss (scalar), weighted
+        # Calculate spinner loss
         spin_loss = spinner_mse_loss(original, reconstructed, beatmap_features) * self.lambda_spin
         
         total_loss = recon_loss + self.annealer(kld) + spin_loss

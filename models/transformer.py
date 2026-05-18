@@ -210,35 +210,35 @@ class OsuReplayTransformer(OsuModel):
     def _train_epoch(self, epoch: int, total_epochs: int) -> dict:
         epoch_pos_loss = 0
         epoch_keys_loss = 0 if self.pred_keys else None
-        
+
         num_batches = len(self.train_loader)
 
-        for i, (batch_x, batch_y) in enumerate(self.train_loader):
+        for i, (batch_x, batch_y, batch_mask) in enumerate(self.train_loader):
             self._set_custom_train_status(f"Batch {i}/{num_batches}")
-            
+
             batch_x = batch_x.to(self.device)
             batch_y = batch_y.to(self.device)
-            
+            batch_mask = batch_mask.to(self.device)
+
             self.optimizer.zero_grad()
             if self.pred_keys:
                 pos_dist, tgt, keys = self.forward(beatmap_features=batch_x, output=batch_y)
             else:
                 pos_dist, tgt = self.forward(beatmap_features=batch_x, output=batch_y)
-            
+
             # (B, T, 2) the mean predictions (direct prediction target or Gaussian mean)
             mu_xy = pos_dist[:, :, :2]
 
             if self.pred_pos_direct:
-                # Simple MSE on positions only
-                pos_loss = F.mse_loss(input=mu_xy, target=tgt[:, :, :2], reduction="mean")
+                pos_loss = F.mse_loss(input=mu_xy[batch_mask], target=tgt[:, :, :2][batch_mask], reduction="mean")
             else:
                 # Gaussian NLL with learned variance
                 logvar_xy = pos_dist[:, :, 2:]
                 var_xy = torch.exp(logvar_xy)
                 var_xy = torch.clamp(var_xy, min=1e-6)
-                pos_loss = F.gaussian_nll_loss(input=mu_xy, target=tgt[:, :, :2], var=var_xy, full=True, reduction="mean")
+                pos_loss = F.gaussian_nll_loss(input=mu_xy[batch_mask], target=tgt[:, :, :2][batch_mask], var=var_xy[batch_mask], full=True, reduction="mean")
             if self.pred_keys:
-                key_loss = F.binary_cross_entropy_with_logits(input=keys, target=tgt[:, :, 2:], reduction="mean")
+                key_loss = F.binary_cross_entropy_with_logits(input=keys[batch_mask], target=tgt[:, :, 2:][batch_mask], reduction="mean")
                 total_loss = pos_loss + key_loss
             else:
                 total_loss = pos_loss
@@ -250,7 +250,7 @@ class OsuReplayTransformer(OsuModel):
             epoch_pos_loss += pos_loss.item()
             if self.pred_keys:
                 epoch_keys_loss += key_loss.item()
-            
+
         result = {"pos_loss": epoch_pos_loss / num_batches}
         if self.pred_keys and epoch_keys_loss is not None:
             result["key_loss"] = epoch_keys_loss / num_batches

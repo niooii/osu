@@ -45,7 +45,9 @@ DEFAULT_CS = 0.4
 DEFAULT_SLIDER_LEN = 0
 DEFAULT_SLIDER_SPEED = 0
 
-# Default frame (pre padding)
+PADDING_FRAME_TIME_UNTIL_CLICK = 9999
+
+# Default frame for mid-sequence "no visible object" frames
 DEFAULT_FRAME = (
     osu_core.SCREEN_WIDTH / 2, osu_core.SCREEN_HEIGHT / 2,  # x, y (raw coordinates)
     MAX_TIME_UNTIL_CLICK, False, False, False,  # time_until_click (seconds), is_slider, is_spinner, is_note
@@ -56,7 +58,7 @@ DEFAULT_FRAME = (
 # Default frame for padding
 DEFAULT_NORM_FRAME = (
     0.0, 0.0,  # x, y (normalized center: (256/512 - 0.5) = 0.0, (192/384 - 0.5) = 0.0)
-    MAX_TIME_UNTIL_CLICK, False, False, False,  # time_until_click, is_slider, is_spinner, is_note
+    PADDING_FRAME_TIME_UNTIL_CLICK, False, False, False,  # time_until_click, is_slider, is_spinner, is_note
     DEFAULT_CS, DEFAULT_SLIDER_SPEED,
     DEFAULT_SLIDER_LEN
 )

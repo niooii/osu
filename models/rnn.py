@@ -32,14 +32,15 @@ class OsuReplayRNN(OsuModel):
         self.pos_model.train()
         epoch_train_loss = 0
 
-        for batch_x, batch_y_pos in tqdm.tqdm(self.train_loader, desc=f'Epoch {epoch + 1}/{total_epochs} (Train)'):
+        for batch_x, batch_y_pos, batch_mask in tqdm.tqdm(self.train_loader, desc=f'Epoch {epoch + 1}/{total_epochs} (Train)'):
             batch_x = batch_x.to(self.device)
             batch_y_pos = batch_y_pos.to(self.device)
+            batch_mask = batch_mask.to(self.device)
 
             # Train position model
             self.pos_optimizer.zero_grad()
             pos = self.pos_model(batch_x)
-            pos_loss = self.pos_criterion(pos, batch_y_pos)
+            pos_loss = self.pos_criterion(pos[batch_mask], batch_y_pos[batch_mask])
             pos_loss.backward()
             torch.nn.utils.clip_grad_norm_(self.pos_model.parameters(), max_norm=1.0)
             self.pos_optimizer.step()
@@ -50,12 +51,13 @@ class OsuReplayRNN(OsuModel):
         self.pos_model.eval()
         epoch_test_loss = 0
         with torch.no_grad():
-            for batch_x, batch_y_pos in self.test_loader:
+            for batch_x, batch_y_pos, batch_mask in self.test_loader:
                 batch_x = batch_x.to(self.device)
                 batch_y_pos = batch_y_pos.to(self.device)
+                batch_mask = batch_mask.to(self.device)
 
                 pos = self.pos_model(batch_x)
-                pos_loss = self.pos_criterion(pos, batch_y_pos)
+                pos_loss = self.pos_criterion(pos[batch_mask], batch_y_pos[batch_mask])
                 epoch_test_loss += pos_loss.item()
 
         # Calculate average losses

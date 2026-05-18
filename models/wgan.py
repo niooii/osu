@@ -123,12 +123,13 @@ class OsuReplayWGAN(OsuModel):
         p_real_mean = 0.0
         p_fake_mean = 0.0
         p_wass = 0.0
-        for j, (batch_x, batch_y_pos) in enumerate(self.train_loader):
+        for j, (batch_x, batch_y_pos, batch_mask) in enumerate(self.train_loader):
             status_prefix = f"{j}/{len(self.train_loader)} (λ_adv: {self.lambda_adv_annealer.current():.2f}, r: {p_real_mean:.4f}, f: {p_fake_mean:.4f}, w: {p_wass:.4f}) "
             self._set_custom_train_status(status_prefix)
 
             batch_x = batch_x.to(device)
             batch_y_pos = batch_y_pos.to(device)
+            batch_mask = batch_mask.to(device)
 
             windowed_features = self.create_windowed_features(batch_x)
 
@@ -196,7 +197,7 @@ class OsuReplayWGAN(OsuModel):
             # or mse is good enough idk lol
             adv_loss = self.lambda_adv_annealer.current() * (-self.critic(windowed_features, fake).mean())
             pos_loss = self.lambda_pos * F.smooth_l1_loss(
-                fake, batch_y_pos, reduction="mean"
+                fake[batch_mask], batch_y_pos[batch_mask], reduction="mean"
             )
 
             gen_loss = adv_loss + pos_loss

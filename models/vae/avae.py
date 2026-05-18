@@ -136,12 +136,13 @@ class OsuReplayAVAE(OsuReplayVAE):
         self.freeze_model(model=self.encoder)
         self.freeze_model(model=self.decoder)
 
-        for j, (batch_x, batch_y_pos) in enumerate(self.train_loader): 
+        for j, (batch_x, batch_y_pos, batch_mask) in enumerate(self.train_loader):
             status_prefix = f"{j}/{len(self.train_loader)} "
             self._set_custom_train_status(status_prefix)
 
             batch_x = batch_x.to(device)
             batch_y_pos = batch_y_pos.to(device)
+            batch_mask = batch_mask.to(device)
 
             # BATCH SIZE
             B = batch_x.shape[0]
@@ -195,7 +196,7 @@ class OsuReplayAVAE(OsuReplayVAE):
 
             # TODO! add consistency loss prob
             adv_loss = -self.critic(windowed, fake).mean()
-            pos_loss = self.lambda_pos * F.smooth_l1_loss(fake, batch_y_pos, reduction='mean')
+            pos_loss = self.lambda_pos * F.smooth_l1_loss(fake[batch_mask], batch_y_pos[batch_mask], reduction='mean')
 
             gen_loss = adv_loss + pos_loss
             

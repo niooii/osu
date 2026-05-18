@@ -107,15 +107,19 @@ class OsuModel(ABC):
         # most classes will extract the cursor position data
         target_data = self._extract_target_data(output_data)
 
-        x_train, x_test, y_train, y_test = train_test_split(
-            input_data, target_data, test_size=test_size, random_state=42
+        # we need to mask out the padding frames that shouldn't contribute towards loss
+        time_until_click_idx = dataset.INPUT_FEATURES.index('time_until_click')
+        valid_mask = input_data[:, :, time_until_click_idx] != dataset.PADDING_FRAME_TIME_UNTIL_CLICK
+
+        x_train, x_test, y_train, y_test, mask_train, mask_test = train_test_split(
+            input_data, target_data, valid_mask, test_size=test_size, random_state=42
         )
 
         train_dataset = TensorDataset(
-            torch.FloatTensor(x_train), torch.FloatTensor(y_train)
+            torch.FloatTensor(x_train), torch.FloatTensor(y_train), torch.BoolTensor(mask_train)
         )
         test_dataset = TensorDataset(
-            torch.FloatTensor(x_test), torch.FloatTensor(y_test)
+            torch.FloatTensor(x_test), torch.FloatTensor(y_test), torch.BoolTensor(mask_test)
         )
 
         self.train_loader = DataLoader(
